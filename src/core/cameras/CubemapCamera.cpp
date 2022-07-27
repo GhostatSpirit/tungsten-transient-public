@@ -145,6 +145,12 @@ bool CubemapCamera::samplePosition(PathSampleGenerator &/*sampler*/, PositionSam
     return true;
 }
 
+bool CubemapCamera::samplePosition(PathSampleGenerator &sampler, PositionSample &sample,
+        const Vec2u &/*pixel*/) const
+{
+    return samplePosition(sampler, sample);
+}
+
 bool CubemapCamera::sampleDirectionAndPixel(PathSampleGenerator &sampler, const PositionSample &point,
         Vec2u &pixel, DirectionSample &sample) const
 {

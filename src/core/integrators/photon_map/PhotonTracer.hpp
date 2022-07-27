@@ -82,8 +82,21 @@ public:
     }
 };
 
+template <bool isTransient>
 class PhotonTracer : public TraceBase
 {
+    static CONSTEXPR bool isSteadyState = !isTransient;
+
+    typedef typename std::conditional<isSteadyState, SteadyVolumePhotonRange, Transient::TransientVolumePhotonRange>::type VolumePhotonRange;
+    typedef typename std::conditional<isSteadyState, SteadyPathPhotonRange, Transient::TransientPathPhotonRange>::type PathPhotonRange;
+    typedef typename std::conditional<isSteadyState, SteadyVolumePhoton, Transient::TransientVolumePhoton>::type VolumePhoton;
+    typedef typename std::conditional<isSteadyState, SteadyPathPhoton, Transient::TransientPathPhoton>::type PathPhoton;
+    typedef typename std::conditional<isSteadyState, SteadyPhotonBeam, Transient::TransientPhotonBeam>::type PhotonBeam;
+    typedef typename std::conditional<isSteadyState, SteadyPhotonPlane0D, Transient::TransientPhotonPlane0D>::type PhotonPlane0D;
+    typedef typename std::conditional<isSteadyState, SteadyPhotonVolume, Transient::TransientPhotonVolume>::type PhotonVolume;
+    typedef typename std::conditional<isSteadyState, SteadyPhotonHyperVolume, Transient::TransientPhotonHyperVolume>::type PhotonHyperVolume;
+    typedef typename std::conditional<isSteadyState, SteadyPhotonBall, Transient::TransientPhotonBall>::type PhotonBall;
+
     PhotonMapSettings _settings;
     uint32 _mailIdx;
     std::unique_ptr<const Photon *[]> _photonQuery;
@@ -105,8 +118,10 @@ public:
 
     Vec3f traceSensorPath(Vec2u pixel, const KdTree<Photon> &surfaceTree,
             const KdTree<VolumePhoton> *mediumTree, const Bvh::BinaryBvh *mediumBvh, const GridAccel *mediumGrid,
-            const PhotonBeam *beams, const PhotonPlane0D *planes0D, const PhotonPlane1D *planes1D, PathSampleGenerator &sampler,
-            float gatherRadius, float volumeGatherRadius,
+            const PhotonBeam *beams, const PhotonPlane0D *planes0D, const PhotonPlane1D *planes1D,
+            const PhotonVolume *volumes, const PhotonHyperVolume *hyperVolumes, const PhotonBall *balls,
+            PathSampleGenerator &sampler,
+            float gatherRadius, float volumeGatherRadius, float beamTimeWidth,
             PhotonMapSettings::VolumePhotonType photonType, Ray &depthRay, bool useFrustumGrid);
 
     void tracePhotonPath(SurfacePhotonRange &surfaceRange, VolumePhotonRange &volumeRange,

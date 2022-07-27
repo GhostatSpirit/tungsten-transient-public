@@ -95,6 +95,12 @@ bool ThinlensCamera::samplePosition(PathSampleGenerator &sampler, PositionSample
     return true;
 }
 
+bool ThinlensCamera::samplePosition(PathSampleGenerator &sampler, PositionSample &sample,
+        const Vec2u &/*pixel*/) const
+{
+    return samplePosition(sampler, sample);
+}
+
 bool ThinlensCamera::sampleDirectionAndPixel(PathSampleGenerator &sampler, const PositionSample &point,
         Vec2u &pixel, DirectionSample &sample) const
 {

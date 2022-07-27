@@ -7,14 +7,14 @@ namespace Tungsten {
 
 class Point : public Primitive
 {
-    Vec3f _pos;
-    Vec3f _power;
-
     std::shared_ptr<TriangleMesh> _proxy;
 
     void buildProxy();
 
 protected:
+    Vec3f _pos;
+    Vec3f _power;
+
     virtual float powerToRadianceFactor() const override;
 
 public:
@@ -50,6 +50,7 @@ public:
     virtual bool invertParametrization(Vec2f uv, Vec3f &pos) const override;
 
     virtual bool isDirac() const override;
+    virtual bool isDirectionDirac() const override;
     virtual bool isInfinite() const override;
 
     virtual float approximateRadiance(uint32 threadIndex, const Vec3f &p) const override;

@@ -141,9 +141,15 @@ protected:
                          const Ray &parentRay,
                          Vec3f *transmission);
 
+    bool handleSurfaceHelper(SurfaceScatterEvent &event, IntersectionTemporary &data,
+                             IntersectionInfo &info, const Medium *&medium,
+                             int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
+                             Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
+                             Medium::MediumState &state, Vec3f *transmittance, bool &geometricBackside);
+
 public:
     SurfaceScatterEvent makeLocalScatterEvent(IntersectionTemporary &data, IntersectionInfo &info,
-            Ray &ray, PathSampleGenerator *sampler) const;
+                                              Ray &ray, PathSampleGenerator *sampler) const;
 
     Vec3f generalizedShadowRay(PathSampleGenerator &sampler,
                                Ray &ray,
@@ -168,6 +174,13 @@ public:
 
     bool handleSurface(SurfaceScatterEvent &event, IntersectionTemporary &data,
                IntersectionInfo &info, const Medium *&medium,
+               int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
+               Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
+               Medium::MediumState &state, Vec3f *transmittance = nullptr);
+
+    // handleSurface with speedOfLight
+    bool handleSurface(SurfaceScatterEvent &event, IntersectionTemporary &data,
+               IntersectionInfo &info, const Medium *&medium, float &speedOfLight,
                int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
                Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
                Medium::MediumState &state, Vec3f *transmittance = nullptr);

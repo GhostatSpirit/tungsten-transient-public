@@ -46,6 +46,9 @@ public:
     bool resumeRender(Scene &scene);
     virtual bool supportsResumeRender() const;
 
+    // TODO: move this to renderSettings. this shouldn't belong here
+    virtual void setTimeCenter(float timeCenter);
+
     bool done() const
     {
         return _currentSpp >= _nextSpp;

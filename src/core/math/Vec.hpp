@@ -677,6 +677,15 @@ bool isinf(const Tungsten::Vec<ElementType, Size> &t)
     return false;
 }
 
+template <typename ElementType, unsigned Size>
+bool isfinite(const Tungsten::Vec<ElementType, Size> &t)
+{
+    for (unsigned i = 0; i < Size; ++i)
+        if (!std::isfinite(t[i]))
+            return false;
+    return true;
+}
+
 }
 
 #endif /* VEC_HPP_ */

@@ -8,6 +8,7 @@
 #include <tribox/tribox.hpp>
 #include <atomic>
 #include <cmath>
+#include "Photon.hpp"
 
 namespace Tungsten {
 
@@ -16,23 +17,31 @@ class GridAccel
 public:
     struct Primitive
     {
-        uint32 idx;
         Vec3f p0, p1, p2, p3;
         float r;
+        TypedPhotonIdx typedIdx;
 
         Primitive() = default;
-        Primitive(uint32 idx_, Vec3f p0_, Vec3f p1_, Vec3f p2_, Vec3f p3_, float r_, bool beam)
-        : idx(beam ? idx_ | 0x80000000u : idx_), p0(p0_), p1(p1_), p2(p2_), p3(p3_), r(r_)
+        Primitive(uint32 idx_, Vec3f p0_, Vec3f p1_, Vec3f p2_, Vec3f p3_, float r_, VolumePhotonEnum type_)
+        : typedIdx(), p0(p0_), p1(p1_), p2(p2_), p3(p3_), r(r_)
         {
+            typedIdx.type = type_;
+            typedIdx.idx = idx_;
         }
 
-        bool isBeam()
+        inline VolumePhotonEnum type() const
         {
-            return idx & 0x80000000u;
+            return static_cast<VolumePhotonEnum>(typedIdx.type);
+        }
+
+        inline uint32 idx() const
+        {
+            return typedIdx.idx;
         }
     };
 
 private:
+    using TriVerts = float[3][3];
     std::unique_ptr<std::atomic<uint32>[]> _atomicListOffsets;
     const uint32 *_listOffsets;
     std::unique_ptr<uint32[]> _lists;
@@ -63,29 +72,134 @@ private:
                     body(x, y, z);
     }
 
-    template<typename LoopBody>
-    void iterateTrapezoid(Vec3f p0, Vec3f p1, Vec3f p2, Vec3f p3, float r, LoopBody body)
+    inline Box3f volumeBounds(Vec3f p, Vec3f a, Vec3f b, Vec3f c, float r, Vec3f scale, Vec3f offset)
     {
-        Vec3f radius = r*_scale;
-        p0 = (p0 - _offset)*_scale;
-        p1 = (p1 - _offset)*_scale;
-        p2 = (p2 - _offset)*_scale;
-        p3 = (p3 - _offset)*_scale;
-        float vertsA[3][3] = {
-            {p0.x(), p0.y(), p0.z()},
-            {p1.x(), p1.y(), p1.z()},
-            {p2.x(), p2.y(), p2.z()},
+        Vec3f points[8];
+        points[0] = (p            );
+        points[1] = (p + a        );
+        points[2] = (p     + b    );
+        points[3] = (p         + c);
+        points[4] = (p + a + b    );
+        points[5] = (p + a     + c);
+        points[6] = (p +     b + c);
+        points[7] = (p + a + b + c);
+
+        Vec3f radius = r * scale;
+        for (uint32 i = 0; i < 8; ++i)
+        {
+            points[i] = (points[i] - offset) * scale;
+        }
+
+        Box3f bounds;
+        for (uint32 i = 0; i < 8; ++i)
+        {
+            bounds.grow(points[i] + radius);
+            bounds.grow(points[i] - radius);
+        }
+        return bounds;
+    }
+
+    inline void getPlaneTriangles(Vec3f p0, Vec3f p1, Vec3f p2, Vec3f p3, TriVerts& t0, TriVerts& t1)
+    {
+        memcpy(&t0[0][0], p0.data(), sizeof(float) * 3);
+        memcpy(&t0[1][0], p1.data(), sizeof(float) * 3);
+        memcpy(&t0[2][0], p2.data(), sizeof(float) * 3);
+
+        memcpy(&t1[0][0], p0.data(), sizeof(float) * 3);
+        memcpy(&t1[1][0], p2.data(), sizeof(float) * 3);
+        memcpy(&t1[2][0], p3.data(), sizeof(float) * 3);
+    }
+
+    template<typename LoopBody>
+    void iterateVolume(Vec3f p, Vec3f a, Vec3f b, Vec3f c, float r, LoopBody body)
+    {
+        Box3f bounds = volumeBounds(p, a, b, c, r, _scale, _offset);
+
+        Vec3f points[8];
+        points[0] = (p            );
+        points[1] = (p + a        );
+        points[2] = (p     + b    );
+        points[3] = (p         + c);
+        points[4] = (p + a + b    );
+        points[5] = (p + a     + c);
+        points[6] = (p +     b + c);
+        points[7] = (p + a + b + c);
+
+        Vec3f radius = r * _scale;
+        for (uint32 i = 0; i < 8; ++i)
+        {
+            points[i] = (points[i] - _offset) * _scale;
+        }
+
+        static const uint32 quadFaceIndices [6][4] =
+        {
+            {0, 1, 4, 2},
+            {3, 5, 7, 6},
+            {0, 1, 5, 3},
+            {1, 4, 7, 5},
+            {2, 4, 7, 6},
+            {0, 2, 6, 3},
         };
-        float vertsB[3][3] = {
-            {p0.x(), p0.y(), p0.z()},
-            {p2.x(), p2.y(), p2.z()},
-            {p3.x(), p3.y(), p3.z()},
-        };
+
+        TriVerts quadTris[12];
+        for (uint32 iface = 0; iface < 6; ++iface)
+        {
+            Vec3f p0 = points[quadFaceIndices[iface][0]];
+            Vec3f p1 = points[quadFaceIndices[iface][1]];
+            Vec3f p2 = points[quadFaceIndices[iface][2]];
+            Vec3f p3 = points[quadFaceIndices[iface][3]];
+
+            getPlaneTriangles(p0, p1, p2, p3, quadTris[2 * iface], quadTris[2 * iface + 1]);
+        }
+
+        iterateBounds(bounds, [&](int x, int y, int z) {
+            Vec3f boxCenter = Vec3f(Vec3i(x, y, z)) + 0.5f;
+            Vec3f boxHalfSize(0.5f + radius);
+
+            bool overlap = false;
+            for (uint32 i = 0; i < 12; ++i)
+            {
+                if (triBoxOverlap(boxCenter.data(), boxHalfSize.data(), quadTris[i]))
+                {
+                    overlap = true;
+                    break;
+                }
+            }
+
+            if (overlap)
+            {
+                body(x, y, z);
+            }
+        });
+    }
+
+    inline Box3f trapezoidBounds(Vec3f p0, Vec3f p1, Vec3f p2, Vec3f p3, float r, Vec3f scale, Vec3f offset)
+    {
+        Vec3f radius = r * scale;
+        p0 = (p0 - offset) * scale;
+        p1 = (p1 - offset) * scale;
+        p2 = (p2 - offset) * scale;
+        p3 = (p3 - offset) * scale;
         Box3f bounds;
         bounds.grow(p0 + radius); bounds.grow(p0 - radius);
         bounds.grow(p1 + radius); bounds.grow(p1 - radius);
         bounds.grow(p2 + radius); bounds.grow(p2 - radius);
         bounds.grow(p3 + radius); bounds.grow(p3 - radius);
+        return bounds;
+    }
+
+    template<typename LoopBody>
+    void iterateTrapezoid(Vec3f p0, Vec3f p1, Vec3f p2, Vec3f p3, float r, LoopBody body)
+    {
+        Box3f bounds = trapezoidBounds(p0, p1, p2, p3, r, _scale, _offset);
+        Vec3f radius = r*_scale;
+        p0 = (p0 - _offset)*_scale;
+        p1 = (p1 - _offset)*_scale;
+        p2 = (p2 - _offset)*_scale;
+        p3 = (p3 - _offset)*_scale;
+        TriVerts vertsA, vertsB;
+        getPlaneTriangles(p0, p1, p2, p3, vertsA, vertsB);
+
         iterateBounds(bounds, [&](int x, int y, int z) {
             Vec3f boxCenter = Vec3f(Vec3i(x, y, z)) + 0.5f;
             Vec3f boxHalfSize(0.5f + radius);
@@ -94,15 +208,21 @@ private:
         });
     }
 
+    inline Box3f beamBounds(Vec3f p0, Vec3f p1, float r, Vec3f scale, Vec3f offset)
+    {
+        Vec3f radius = r * scale;
+        Box3f bounds;
+        bounds.grow((p0 - offset) * scale + radius);
+        bounds.grow((p0 - offset) * scale - radius);
+        bounds.grow((p1 - offset) * scale + radius);
+        bounds.grow((p1 - offset) * scale - radius);
+        return bounds;
+    }
+
     template<typename LoopBody>
     void iterateBeam(Vec3f p0, Vec3f p1, float r, LoopBody body)
     {
-        Vec3f radius = r*_scale;
-        Box3f bounds;
-        bounds.grow((p0 - _offset)*_scale + radius);
-        bounds.grow((p0 - _offset)*_scale - radius);
-        bounds.grow((p1 - _offset)*_scale + radius);
-        bounds.grow((p1 - _offset)*_scale - radius);
+        Box3f bounds = beamBounds(p0, p1, r, _scale, _offset);
 
         Vec3f d = p1 - p0;
         Vec3f invD = 1.0f/d;
@@ -130,19 +250,54 @@ private:
         });
     }
 
+
+    Box3f getPrimsBounds(const std::vector<Primitive>& prims)
+    {
+        Box3f bounds;
+        for(size_t i = 0; i < prims.size(); ++i)
+        {
+            switch (prims[i].type())
+            {
+                case VOLUME_BEAMS:
+                    bounds.grow(beamBounds(prims[i].p0, prims[i].p1, prims[i].r, Vec3f(1.f), Vec3f(0.f)));
+                    break;
+                case VOLUME_PLANES:
+                    bounds.grow(trapezoidBounds(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, Vec3f(1.f), Vec3f(0.f)));
+                    break;
+                case VOLUME_VOLUMES:
+                    bounds.grow(volumeBounds(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, Vec3f(1.f), Vec3f(0.f)));
+                    break;
+                default:
+                    FAIL("unknown PrimType: %u", prims[i].type());
+            }
+        }
+        return bounds;
+    }
+
     void buildAccel(std::vector<Primitive> prims)
     {
         _atomicListOffsets = zeroAlloc<std::atomic<uint32>>(_cellCount + 1);
 
         ThreadUtils::parallelFor(0, prims.size(), ThreadUtils::pool->threadCount() + 1, [&](uint32 i) {
-            if (prims[i].isBeam()) {
-                iterateBeam(prims[i].p0, prims[i].p1, prims[i].r, [&](int x, int y, int z) {
-                    _atomicListOffsets[idx(x, y, z)]++;
-                });
-            } else {
-                iterateTrapezoid(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
-                    _atomicListOffsets[idx(x, y, z)]++;
-                });
+            switch (prims[i].type())
+            {
+                case VOLUME_BEAMS:
+                    iterateBeam(prims[i].p0, prims[i].p1, prims[i].r, [&](int x, int y, int z) {
+                        _atomicListOffsets[idx(x, y, z)]++;
+                    });
+                    break;
+                case VOLUME_PLANES:
+                    iterateTrapezoid(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
+                        _atomicListOffsets[idx(x, y, z)]++;
+                    });
+                    break;
+                case VOLUME_VOLUMES:
+                    iterateVolume(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
+                        _atomicListOffsets[idx(x, y, z)]++;
+                    });
+                    break;
+                default:
+                    FAIL("unknown PrimType!");
             }
         });
 
@@ -155,14 +310,25 @@ private:
         _lists.reset(new uint32[prefixSum]);
 
         ThreadUtils::parallelFor(0, prims.size(), ThreadUtils::pool->threadCount() + 1, [&](uint32 i) {
-            if (prims[i].isBeam()) {
-                iterateBeam(prims[i].p0, prims[i].p1, prims[i].r, [&](int x, int y, int z) {
-                    _lists[--_atomicListOffsets[idx(x, y, z)]] = prims[i].idx & 0x7FFFFFFFu;
-                });
-            } else {
-                iterateTrapezoid(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
-                    _lists[--_atomicListOffsets[idx(x, y, z)]] = prims[i].idx;
-                });
+            switch (prims[i].type())
+            {
+                case VOLUME_BEAMS:
+                    iterateBeam(prims[i].p0, prims[i].p1, prims[i].r, [&](int x, int y, int z) {
+                        _lists[--_atomicListOffsets[idx(x, y, z)]] = prims[i].typedIdx.idx;
+                    });
+                    break;
+                case VOLUME_PLANES:
+                    iterateTrapezoid(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
+                        _lists[--_atomicListOffsets[idx(x, y, z)]] = prims[i].typedIdx.idx;
+                    });
+                    break;
+                case VOLUME_VOLUMES:
+                    iterateVolume(prims[i].p0, prims[i].p1, prims[i].p2, prims[i].p3, prims[i].r, [&](int x, int y, int z) {
+                        _lists[--_atomicListOffsets[idx(x, y, z)]] = prims[i].typedIdx.idx;
+                    });
+                    break;
+                default:
+                    FAIL("unknown PrimType!");
             }
         });
 
@@ -173,6 +339,11 @@ public:
     GridAccel(Box3f bounds, int memBudgetKb, std::vector<Primitive> prims)
     {
         Timer timer;
+        if (bounds.empty())
+        {
+            bounds = getPrimsBounds(prims);
+        }
+
 
         Vec3f diag = bounds.diagonal();
         Vec3f relDiag = diag/diag.max();

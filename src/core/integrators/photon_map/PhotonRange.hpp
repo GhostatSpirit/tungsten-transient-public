@@ -102,8 +102,14 @@ uint32 streamCompact(std::vector<PhotonRange<PhotonType>> &ranges)
 }
 
 typedef PhotonRange<Photon> SurfacePhotonRange;
-typedef PhotonRange<VolumePhoton> VolumePhotonRange;
-typedef PhotonRange<PathPhoton> PathPhotonRange;
+typedef PhotonRange<SteadyVolumePhoton> SteadyVolumePhotonRange;
+typedef PhotonRange<SteadyPathPhoton> SteadyPathPhotonRange;
+
+namespace Transient
+{
+typedef PhotonRange<TransientVolumePhoton> TransientVolumePhotonRange;
+typedef PhotonRange<TransientPathPhoton> TransientPathPhotonRange;
+}
 
 }
 

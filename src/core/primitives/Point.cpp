@@ -158,6 +158,11 @@ bool Point::isDirac() const
     return true;
 }
 
+bool Point::isDirectionDirac() const
+{
+    return false;
+}
+
 bool Point::isInfinite() const
 {
     return false;

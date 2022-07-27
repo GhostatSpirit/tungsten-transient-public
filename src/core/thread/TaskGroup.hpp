@@ -1,3 +1,4 @@
+// #pragma optimize("", off)
 #ifndef TASKGROUP_HPP_
 #define TASKGROUP_HPP_
 
@@ -29,6 +30,7 @@ class TaskGroup
     std::mutex _waitMutex;
     std::condition_variable _waitCond;
     std::atomic<bool> _done, _abort;
+    std::mutex _exceptionPtrMutex;
 
     void finish()
     {
@@ -54,11 +56,13 @@ public:
 
     void run(uint32 threadId, uint32 taskId)
     {
-        try {
-            _func(taskId, _numSubTasks, threadId);
-        } catch (...) {
-            _exceptionPtr = std::current_exception();
-        }
+        _func(taskId, _numSubTasks, threadId);
+        //try {
+        //
+        //} catch (...) {
+        //    std::unique_lock<std::mutex> lock(_exceptionPtrMutex);
+        //    _exceptionPtr = std::current_exception();
+        //}
 
         uint32 num = ++_finishedSubTasks;
         if (num == _numSubTasks || (_abort && num == _startedSubTasks))
@@ -71,7 +75,11 @@ public:
         _waitCond.wait(lock, [this]{return _done == true;});
 
         if (_exceptionPtr)
+        {
+            // std::unique_lock<std::mutex> lock(_exceptionPtrMutex);
             std::rethrow_exception(_exceptionPtr);
+        }
+
     }
 
     void abort()

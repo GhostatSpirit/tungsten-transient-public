@@ -1,0 +1,115 @@
+{
+    "media": [
+        {
+            "name": "gas",
+            "phase_function": {
+                "type": "isotropic"
+            },
+            "max_bounces": 1024,
+            "type": "homogeneous",
+            "sigma_s": 1,
+            "sigma_a": 1,
+            "speed_of_light": 1.0
+        }
+    ],
+    "bsdfs": [
+        {
+            "name": "light",
+            "albedo": 1,
+            "type": "null"
+        }
+    ],
+    "primitives": [
+        {
+            "name": "light",
+            "transform": {
+                "position": [
+                    0,
+                    0.75,
+                    0
+                ],
+                "look_at": [
+                    0,
+                    0.0,
+                    0
+                ],
+                "up": [
+                    1,
+                    0,
+                    0
+                ]
+            },
+            "power": [
+                1e3,
+                1e3,
+                1e3
+            ],
+            "ext_medium": "gas",
+            "type": "directional_point",
+            "bsdf": "light"
+        }
+    ],
+    "camera": {
+        "tonemap": "gamma",
+        "resolution": [
+            640,
+            480
+        ],
+        "reconstruction_filter": "tent",
+        "transform": {
+            "position": [
+                1.0606601717798214,
+                0,
+                1.0606601717798214
+            ],
+            "look_at": [
+                0,
+                0.0,
+                0
+            ],
+            "up": [
+                0,
+                1,
+                0
+            ]
+        },
+        "type": "orthographic",
+        "orthographic_size": 1.0,
+        "fov": 100,
+        "medium": "gas"
+    },
+    "integrator": {
+        "type": "progressive_transient_photon_map",
+        "volume_photon_type": "mis_volumes_balls",
+        "low_order_scattering": true,
+        "min_bounces": 3,
+        "max_bounces": 4,
+        "enable_consistency_checks": true,
+        "enable_two_sided_shading": true,
+        "gather_radius": 0.05,
+        "photon_count": 1e4,
+        "volume_photon_count": 1e4,
+        "gather_photon_count_": 20,
+        "alpha": 0.66666666666666,
+        "fixed_volume_radius": true,
+        "volume_gather_radius": 0.05,
+        "transient_time_center" : 1.45,
+        "transient_time_width" : 0.05,
+        "delta_time_gate": true,
+        "use_grid": false
+    },
+    "renderer": {
+        "output_file": "TungstenRender.png",
+        "hdr_output_file": "TungstenRender.pfm",
+        "resume_render_file": "TungstenRenderState.dat",
+        "overwrite_output_files": false,
+        "adaptive_sampling": false,
+        "enable_resume_render": false,
+        "stratified_sampler": false,
+        "scene_bvh": true,
+        "spp": 50,
+        "spp_step": 1,
+        "checkpoint_interval": "0",
+        "timeout": "0"
+    }
+}

@@ -12,7 +12,9 @@ namespace Tungsten {
 HomogeneousMedium::HomogeneousMedium()
 : _materialSigmaA(0.0f),
   _materialSigmaS(0.0f),
-  _density(1.0f)
+  _density(1.0f),
+  _speedOfLight(1.0f),
+  _invSpeedOfLight(1.0f)
 {
 }
 
@@ -22,6 +24,8 @@ void HomogeneousMedium::fromJson(JsonPtr value, const Scene &scene)
     value.getField("sigma_a", _materialSigmaA);
     value.getField("sigma_s", _materialSigmaS);
     value.getField("density", _density);
+    value.getField("speed_of_light", _speedOfLight);
+    _invSpeedOfLight = 1.0f / _speedOfLight;
 }
 
 rapidjson::Value HomogeneousMedium::toJson(Allocator &allocator) const
@@ -30,7 +34,8 @@ rapidjson::Value HomogeneousMedium::toJson(Allocator &allocator) const
         "type", "homogeneous",
         "sigma_a", _materialSigmaA,
         "sigma_s", _materialSigmaS,
-        "density", _density
+        "density", _density,
+        "speed_of_Light", _speedOfLight,
     };
 }
 
@@ -127,6 +132,28 @@ float HomogeneousMedium::pdf(PathSampleGenerator &/*sampler*/, const Ray &ray, b
         else
             return (_sigmaT*_transmittance->mediumPdf(tau, startOnSurface)).avg();
     }
+}
+
+float HomogeneousMedium::timeTraveled(float distance) const
+{
+    return distance * _invSpeedOfLight;
+}
+
+float HomogeneousMedium::timeTraveled(const Vec3f &pStart, const Vec3f &pEnd) const
+{
+    Vec3f disp = pEnd - pStart;
+    float dist = disp.length();
+    return dist * _invSpeedOfLight;
+}
+
+Vec3f HomogeneousMedium::travel(const Vec3f &o, const Vec3f &d, float time) const
+{
+    return o + d * time * _speedOfLight;
+}
+
+float HomogeneousMedium::speedOfLight(const Vec3f &p) const
+{
+    return _speedOfLight;
 }
 
 }

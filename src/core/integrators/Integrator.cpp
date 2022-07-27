@@ -166,4 +166,8 @@ bool Integrator::supportsResumeRender() const
     return false;
 }
 
+void Integrator::setTimeCenter(float timeCenter)
+{
+}
+
 }

@@ -33,6 +33,9 @@ class Primitive : public JsonSerializable
     std::shared_ptr<Medium> _extMedium;
 
 protected:
+    float _intSpeedOfLight;
+    float _extSpeedOfLight;
+
     static std::shared_ptr<Bsdf> _defaultBsdf;
 
     std::shared_ptr<Texture> _emission;
@@ -83,6 +86,7 @@ public:
     virtual bool invertParametrization(Vec2f uv, Vec3f &pos) const = 0;
 
     virtual bool isDirac() const = 0;
+    virtual bool isDirectionDirac() const;
     virtual bool isInfinite() const = 0;
 
     virtual float approximateRadiance(uint32 threadIndex, const Vec3f &p) const = 0;
@@ -181,6 +185,23 @@ public:
         else
             return currentMedium;
     }
+
+    bool hasIntSpeedOfLight() const
+    {
+        return _intSpeedOfLight > 0;
+    }
+
+    bool hasExtSpeedOfLight() const
+    {
+        return _extSpeedOfLight > 0;
+    }
+
+    bool overridesSpeedOfLight() const
+    {
+        return hasIntSpeedOfLight() || hasExtSpeedOfLight();
+    }
+
+    float selectSpeedOfLight(float curSpeedOfLight, Vec3f pos, bool geometricBackside) const;
 };
 
 }

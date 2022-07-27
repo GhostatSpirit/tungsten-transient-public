@@ -6,6 +6,8 @@
 #include "io/JsonObject.hpp"
 #include "io/Scene.hpp"
 
+#include "Debug.hpp"
+
 namespace Tungsten {
 
 std::shared_ptr<Bsdf> Primitive::_defaultBsdf = std::make_shared<LambertBsdf>();
@@ -29,6 +31,11 @@ void Primitive::fromJson(JsonPtr value, const Scene &scene)
 
     if (auto intMedium  = value["int_medium"]) _intMedium = scene.fetchMedium(intMedium);
     if (auto extMedium  = value["ext_medium"]) _extMedium = scene.fetchMedium(extMedium);
+
+    _intSpeedOfLight = -1.f;
+    _extSpeedOfLight = -1.f;
+    value.getField("int_speed_of_light", _intSpeedOfLight);
+    value.getField("ext_speed_of_light", _extSpeedOfLight);
 }
 
 rapidjson::Value Primitive::toJson(Allocator &allocator) const
@@ -44,6 +51,10 @@ rapidjson::Value Primitive::toJson(Allocator &allocator) const
         result.add("int_medium", *_intMedium);
     if (_extMedium)
         result.add("ext_medium", *_extMedium);
+    if (hasIntSpeedOfLight())
+        result.add("int_speed_of_light", _intSpeedOfLight);
+    if (hasExtSpeedOfLight())
+        result.add("ext_speed_of_light", _extSpeedOfLight);
 
     return result;
 }
@@ -108,6 +119,12 @@ Vec3f Primitive::evalDirect(const IntersectionTemporary &data, const Intersectio
     return (*_emission)[info];
 }
 
+bool Primitive::isDirectionDirac() const
+{
+    FAIL("isDirectionDirac() not implemented!");
+    return false;
+}
+
 void Primitive::prepareForRender()
 {
     if (_power) {
@@ -160,6 +177,38 @@ void Primitive::setupTangentFrame(const IntersectionTemporary &data,
     B = N.cross(T);
 
     dst = TangentFrame(N, T, B);
+}
+
+float Primitive::selectSpeedOfLight(float curSpeedOfLight, Vec3f pos, bool geometricBackside) const
+{
+    float ret = curSpeedOfLight;
+    if (overridesSpeedOfLight())
+    {
+        if (geometricBackside)
+        {
+            if (_intMedium.get())
+            {
+                ret = _intMedium->speedOfLight(pos);
+            }
+            else if (hasIntSpeedOfLight())
+            {
+                ret = _intSpeedOfLight;
+            }
+        }
+        else
+        {
+            if (_extMedium.get())
+            {
+                ret = _extMedium->speedOfLight(pos);
+            }
+            else if (hasExtSpeedOfLight())
+            {
+                ret = _extSpeedOfLight;
+            }
+        }
+    }
+
+    return ret;
 }
 
 }

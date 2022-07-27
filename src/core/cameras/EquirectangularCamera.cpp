@@ -57,6 +57,12 @@ bool EquirectangularCamera::samplePosition(PathSampleGenerator &/*sampler*/, Pos
     return true;
 }
 
+bool EquirectangularCamera::samplePosition(PathSampleGenerator &sampler, PositionSample &sample,
+        const Vec2u &/*pixel*/) const
+{
+    return samplePosition(sampler, sample);
+}
+
 bool EquirectangularCamera::sampleDirectionAndPixel(PathSampleGenerator &sampler, const PositionSample &point,
         Vec2u &pixel, DirectionSample &sample) const
 {

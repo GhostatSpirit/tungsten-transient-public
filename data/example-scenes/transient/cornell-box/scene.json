@@ -1,5 +1,17 @@
 {
-    "media": [],
+    "media": [
+        {
+            "name": "gas",
+            "phase_function": {
+                "type": "isotropic"
+            },
+            "max_bounces": 1024,
+            "type": "homogeneous",
+            "sigma_s": 1,
+            "sigma_a": 0,
+            "speed_of_light": 1.0
+        }
+    ],
     "bsdfs": [
         {
             "name": "leftWall",
@@ -47,6 +59,11 @@
             "type": "lambert"
         },
         {
+            "name": "frontWall",
+            "albedo": 1,
+            "type": "forward"
+        },
+        {
             "name": "shortBox",
             "albedo": [
                 0.725,
@@ -71,6 +88,29 @@
         }
     ],
     "primitives": [
+        {
+            "name": "frontWall",
+            "transform": {
+                "position": [
+                    0,
+                    1,
+                    1
+                ],
+                "scale": [
+                    2,
+                    4,
+                    2
+                ],
+                "rotation": [
+                    0,
+                    90,
+                    -90
+                ]
+            },
+            "int_medium": "gas",
+            "type": "quad",
+            "bsdf": "frontWall"
+        },
         {
             "name": "floor",
             "transform": {
@@ -204,7 +244,7 @@
                 "position": [
                     -0.335439,
                     0.6,
-                    -0.291415
+                    -0.1
                 ],
                 "scale": [
                     0.607289,
@@ -228,30 +268,31 @@
                     1.98,
                     -0.03
                 ],
-                "scale": [
-                    0.47,
-                    0.1786,
-                    0.38
-                ],
-                "rotation": [
+                "look_at": [
                     0,
-                    180,
-                    180
+                    0.0,
+                    0
+                ],
+                "up": [
+                    1,
+                    0,
+                    0
                 ]
             },
-            "emission": [
-                17,
-                12,
-                4
+            "power": [
+                50,
+                50,
+                50
             ],
-            "type": "quad",
+            "ext_medium": "gas",
+            "type": "directional_point",
             "bsdf": "light"
         }
     ],
     "camera": {
-        "tonemap": "filmic",
+        "tonemap": "gamma",
         "resolution": [
-            1000,
+            563,
             563
         ],
         "reconstruction_filter": "tent",
@@ -259,7 +300,7 @@
             "position": [
                 0,
                 1,
-                6.8
+                3.4
             ],
             "look_at": [
                 0,
@@ -272,29 +313,43 @@
                 0
             ]
         },
-        "type": "orthographic",
-        "fov": 35,
+        "type": "pinhole",
+        "fov": 46.72918,
         "orthographic_size": 1.0
     },
     "integrator": {
-        "type": "path_tracer",
-        "min_bounces": 0,
-        "max_bounces": 64,
-        "enable_consistency_checks": false,
+        "type": "progressive_transient_photon_map",
+        "include_surfaces": false,
+        "volume_photon_type": "mis_volumes_balls",
+        "low_order_scattering": true,
+        "min_bounces": 3,
+        "max_bounces": 10,
+        "enable_consistency_checks": true,
         "enable_two_sided_shading": true,
-        "enable_light_sampling": true,
-        "enable_volume_light_sampling": true
+        "gather_radius": 0.05,
+        "photon_count": 1e4,
+        "volume_photon_count": 1e4,
+        "gather_photon_count_": 20,
+        "alpha": 0.66666666666666,
+        "fixed_volume_radius": true,
+        "volume_gather_radius": 0.02,
+        "transient_time_center" : 1.9159663865546217,
+        "transient_time_width" : 0.1,
+        "delta_time_gate": true,
+        "exclude_non_mis": false,
+        "use_grid": false
     },
     "renderer": {
         "output_file": "TungstenRender.png",
+        "hdr_output_file": "TungstenRender.pfm",
         "resume_render_file": "TungstenRenderState.dat",
         "overwrite_output_files": false,
         "adaptive_sampling": false,
         "enable_resume_render": false,
         "stratified_sampler": false,
         "scene_bvh": true,
-        "spp": 64,
-        "spp_step": 16,
+        "spp": 50,
+        "spp_step": 1,
         "checkpoint_interval": "0",
         "timeout": "0"
     }

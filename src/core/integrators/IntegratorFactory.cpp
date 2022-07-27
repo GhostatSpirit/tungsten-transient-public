@@ -14,12 +14,14 @@ namespace Tungsten {
 DEFINE_STRINGABLE_ENUM(IntegratorFactory, "integrator", ({
     {"path_tracer", std::make_shared<PathTraceIntegrator>},
     {"light_tracer", std::make_shared<LightTraceIntegrator>},
-    {"photon_map", std::make_shared<PhotonMapIntegrator>},
-    {"progressive_photon_map", std::make_shared<ProgressivePhotonMapIntegrator>},
+    {"photon_map", std::make_shared<PhotonMapIntegrator<false>>},
+    {"progressive_photon_map", std::make_shared<ProgressivePhotonMapIntegrator<false>>},
     {"bidirectional_path_tracer", std::make_shared<BidirectionalPathTraceIntegrator>},
     {"kelemen_mlt", std::make_shared<KelemenMltIntegrator>},
     {"multiplexed_mlt", std::make_shared<MultiplexedMltIntegrator>},
     {"reversible_jump_mlt", std::make_shared<ReversibleJumpMltIntegrator>},
+    {"transient_photon_map", std::make_shared<PhotonMapIntegrator<true>>},
+    {"progressive_transient_photon_map", std::make_shared<ProgressivePhotonMapIntegrator<true>>},
 }))
 
 }

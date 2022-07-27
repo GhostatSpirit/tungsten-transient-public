@@ -70,6 +70,11 @@ public:
             bool endOnSurface, float &pdfForward, float &pdfBackward) const;
     virtual const PhaseFunction *phaseFunction(const Vec3f &p) const;
 
+    virtual float timeTraveled(float distance) const;
+    virtual float timeTraveled(const Vec3f &pStart, const Vec3f& pEnd) const;
+    virtual Vec3f travel(const Vec3f &o, const Vec3f &d, float time) const;
+    virtual float speedOfLight(const Vec3f &p) const;
+
     bool isDirac() const;
 };
 

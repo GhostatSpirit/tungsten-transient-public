@@ -14,6 +14,10 @@ class HomogeneousMedium : public Medium
     Vec3f _sigmaT;
     bool _absorptionOnly;
 
+    // For transient rendering:
+    float _speedOfLight;
+    float _invSpeedOfLight;
+
 public:
     HomogeneousMedium();
 
@@ -32,6 +36,10 @@ public:
             MediumState &state, MediumSample &sample) const override;
     virtual Vec3f transmittance(PathSampleGenerator &sampler, const Ray &ray, bool startOnSurface, bool endOnSurface) const override;
     virtual float pdf(PathSampleGenerator &sampler, const Ray &ray, bool startOnSurface, bool endOnSurface) const override;
+    virtual float timeTraveled(float distance) const override;
+    virtual float timeTraveled(const Vec3f& pStart, const Vec3f& pEnd) const override;
+    virtual Vec3f travel(const Vec3f& o, const Vec3f &d, float time) const override;
+    virtual float speedOfLight(const Vec3f& p) const override;
 
     Vec3f sigmaA() const { return _sigmaA; }
     Vec3f sigmaS() const { return _sigmaS; }

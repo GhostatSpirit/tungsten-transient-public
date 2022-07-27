@@ -60,4 +60,28 @@ bool Medium::isDirac() const
     return _transmittance->isDirac();
 }
 
+float Medium::timeTraveled(float distance) const
+{
+    FAIL("Medium::timeTraveled not implemented!");
+    return 0.0f;
+}
+
+float Medium::timeTraveled(const Vec3f &pStart, const Vec3f &pEnd) const
+{
+    FAIL("Medium::timeTraveled not implemented!");
+    return 0.0f;
+}
+
+Vec3f Medium::travel(const Vec3f &o, const Vec3f &d, float time) const
+{
+    FAIL("Medium::travel not implemented!");
+    return Vec3f();
+}
+
+float Medium::speedOfLight(const Vec3f &p) const
+{
+    FAIL("Medium::speedOfLight not implemented!");
+    return 0.0f;
+}
+
 }

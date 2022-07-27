@@ -1,8 +1,15 @@
-cmake_minimum_required(VERSION 2.8.11)
+cmake_minimum_required(VERSION 3.10)
+
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+  set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake"
+      CACHE STRING "")
+endif()
+
 project(Tungsten)
 
 set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
 
+# TODO: delete all CXX11 code because we are enabling C++17 in a new way.
 include(CXX11)
 check_for_cxx11_compiler(CXX11_COMPILER)
 
@@ -11,6 +18,11 @@ if(CXX11_COMPILER)
 else()
     message(FATAL_ERROR "The compiler ${CMAKE_CXX_COMPILER} seems to have no C++11 support. Please try again with a more recent compiler version.")
 endif()
+
+# HACK: enable C++ 17
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
 # AVX does not do much benefit at the moment, but breaks compilation on some platforms.
 # Disabled for now until AVX becomes important enough to reconsider.
@@ -24,6 +36,9 @@ OptimizeForArchitecture()
 if (MSVC)
     # Needed by MSVC, but not added by OptimizeForArchitexture()
     add_definitions(-D__SSE__)
+    # enable /MP flag for multithreaded compiling
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+    message("${CMAKE_CXX_FLAGS}")
 endif()
 
 add_definitions(-DINSTALL_PREFIX="${CMAKE_INSTALL_PREFIX}")
@@ -97,12 +112,36 @@ else()
     message(STATUS "No Eigen3 detected. denoiser will not be built")
 endif()
 
-find_package(OpenEXR)
+if (DEFINED VCPKG_TARGET_TRIPLET)
+    # using vcpkg to find OpenEXR
+    # temporally remove ./cmake from module path so we won't trigger FindOpenEXR.cmake
+    list(REMOVE_ITEM CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+
+    find_package(IlmBase CONFIG)
+    find_package(OpenEXR CONFIG)
+    if (NOT OPENEXR_FOUND OR NOT ILMBASE_FOUND)
+        set(OPENEXR_FOUND FALSE CACHE BOOL "" FORCE)
+    else()
+        find_path(OPENEXR_ACTUAL_INCLUDE_DIR ImfRgbaFile.h PATH_SUFFIXES OpenEXR PATHS ${OPENEXR_INCLUDE_DIR})
+        if (MSVC)
+            add_definitions(-DOPENEXR_DLL)
+        endif()
+    endif()
+
+    set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake" ${CMAKE_MODULE_PATH})
+else()
+    # using FindOpenEXR.cmake to find OpenEXR
+    find_package(OpenEXR)
+    if (OPENEXR_FOUND)
+        set(OPENEXR_ACTUAL_INCLUDE_DIR ${OPENEXR_INCLUDE_DIR})
+    endif()
+endif()
+
 if (OPENEXR_FOUND)
     message(STATUS "OpenEXR detected. Building with .exr support")
     add_definitions(-DOPENEXR_AVAILABLE)
-    include_directories(${OPENEXR_INCLUDE_DIR})
-    set(core_libs ${core_libs} ${OPENEXR_LIBRARIES})
+    include_directories(${OPENEXR_ACTUAL_INCLUDE_DIR})
+    set(core_libs ${core_libs} ${OPENEXR_LIBRARIES} ${ILMBASE_LIBRARIES})
 else()
     message(STATUS "No OpenEXR detected. Building without .exr support")
 endif()
@@ -161,6 +200,9 @@ target_link_libraries(tungsten ${core_libs})
 
 if (WIN32)
     set(socket_libs wsock32 Ws2_32)
+    # we4002, we4003: set too many arguments and too few arguments in macro to error
+    # we4715: not all control paths return a value
+    target_compile_options(core PRIVATE /we4002 /we4003 /we4715)
 else()
     set(socket_libs "")
 endif()
@@ -180,7 +222,7 @@ find_package(Qt5OpenGL)
 if (OPENGL_FOUND AND Qt5Widgets_FOUND)
     include_directories(${OPENGL_INCLUDE_DIR})
     set(opengl_libs ${OPENGL_LIBRARIES})
-    
+
     file(GLOB_RECURSE Editor_SOURCES "src/editor/*.cpp")
     if (APPLE)
         list(APPEND Editor_SOURCES "src/editor/CoreProfileAttributes.mm")
@@ -190,11 +232,11 @@ if (OPENGL_FOUND AND Qt5Widgets_FOUND)
     qt5_use_modules(editor Widgets OpenGL)
     target_link_libraries(editor ${core_libs} ${opengl_libs} Qt5::Widgets Qt5::OpenGL)
     if (APPLE)
-        find_library(APPKIT NAMES AppKit) 
+        find_library(APPKIT NAMES AppKit)
         target_link_libraries(editor ${APPKIT})
     endif()
     message(STATUS "Building editor")
-    
+
     set(data_dirs ${data_dirs} editor shaders)
     set(executables ${executables} editor)
 else()

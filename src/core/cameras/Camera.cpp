@@ -90,6 +90,11 @@ bool Camera::samplePosition(PathSampleGenerator &/*sampler*/, PositionSample &/*
     return false;
 }
 
+bool Camera::samplePosition(PathSampleGenerator & /*sampler*/, PositionSample & /*sample*/, const Vec2u & /*pixel*/) const
+{
+    return false;
+}
+
 bool Camera::sampleDirectionAndPixel(PathSampleGenerator &/*sampler*/, const PositionSample &/*point*/,
         Vec2u &/*pixel*/, DirectionSample &/*sample*/) const
 {

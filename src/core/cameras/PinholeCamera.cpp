@@ -60,6 +60,12 @@ bool PinholeCamera::samplePosition(PathSampleGenerator &/*sampler*/, PositionSam
     return true;
 }
 
+bool PinholeCamera::samplePosition(PathSampleGenerator &sampler, PositionSample &sample,
+        const Vec2u &/*pixel*/) const
+{
+    return samplePosition(sampler, sample);
+}
+
 bool PinholeCamera::sampleDirectionAndPixel(PathSampleGenerator &sampler, const PositionSample &point,
         Vec2u &pixel, DirectionSample &sample) const
 {

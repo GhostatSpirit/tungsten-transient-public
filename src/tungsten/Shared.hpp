@@ -42,6 +42,7 @@ static const int OPT_SEED              = 7;
 static const int OPT_TIMEOUT           = 8;
 static const int OPT_OUTPUT_FILE       = 9;
 static const int OPT_HDR_OUTPUT_FILE   = 10;
+static const int OPT_TIME_CENTER       = 12;
 
 enum RenderState
 {
@@ -143,6 +144,7 @@ public:
         parser.addOption('s', "seed", "Specifies the random seed to use", true, OPT_SEED);
         parser.addOption('o', "output-file", "Specifies the output file name. Overrides the setting in the scene file", true, OPT_OUTPUT_FILE);
         parser.addOption('e', "hdr-output-file", "Specifies the hdr output file name. Overrides the setting in the scene file", true, OPT_HDR_OUTPUT_FILE);
+        parser.addOption('\0', "time-center", "Sets the time gate center for time-gated rendering. Overrides the setting in the scene file", true, OPT_TIME_CENTER);
     }
 
     void setup()
@@ -230,6 +232,11 @@ public:
             Path p(_parser.param(OPT_HDR_OUTPUT_FILE));
             p.freezeWorkingDirectory();
             _scene->rendererSettings().setHdrOutputFile(p);
+        }
+
+        if (_parser.isPresent(OPT_TIME_CENTER)) {
+            float timeCenter = std::stof(_parser.param(OPT_TIME_CENTER));
+            _scene->integrator()->setTimeCenter(timeCenter);
         }
 
         {

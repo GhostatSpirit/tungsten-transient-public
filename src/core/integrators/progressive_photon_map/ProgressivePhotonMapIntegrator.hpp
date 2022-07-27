@@ -18,14 +18,19 @@
 
 #include "math/MathUtil.hpp"
 
+#include "io/JsonSerializable.hpp"
+
 #include <atomic>
 #include <memory>
 #include <vector>
 
 namespace Tungsten {
 
-class ProgressivePhotonMapIntegrator : public PhotonMapIntegrator
+template<bool isTransient>
+class ProgressivePhotonMapIntegrator : public PhotonMapIntegrator<isTransient>
 {
+    typedef JsonSerializable::Allocator Allocator;
+
     ProgressivePhotonMapSettings _progressiveSettings;
 
     std::vector<UniformPathSampler> _shadowSamplers;

@@ -72,6 +72,10 @@ public:
     virtual rapidjson::Value toJson(Allocator &allocator) const override;
 
     virtual bool samplePosition(PathSampleGenerator &sampler, PositionSample &sample) const;
+    // For cases when the sampled position is related with pixel location.
+    // (e.g. orthographic camera)
+    virtual bool samplePosition(PathSampleGenerator &sampler, PositionSample &sample,
+            const Vec2u &pixel) const;
     virtual bool sampleDirectionAndPixel(PathSampleGenerator &sampler, const PositionSample &point,
             Vec2u &pixel, DirectionSample &sample) const;
     virtual bool sampleDirection(PathSampleGenerator &sampler, const PositionSample &point, Vec2u pixel,

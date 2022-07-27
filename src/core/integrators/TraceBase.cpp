@@ -513,11 +513,11 @@ bool TraceBase::handleVolume(PathSampleGenerator &sampler, MediumSample &mediumS
     return true;
 }
 
-bool TraceBase::handleSurface(SurfaceScatterEvent &event, IntersectionTemporary &data,
-                              IntersectionInfo &info, const Medium *&medium,
-                              int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
-                              Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
-                              Medium::MediumState &state, Vec3f *transmittance)
+bool TraceBase::handleSurfaceHelper(SurfaceScatterEvent &event, IntersectionTemporary &data,
+                                    IntersectionInfo &info, const Medium *&medium,
+                                    int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
+                                    Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
+                                    Medium::MediumState &state, Vec3f *transmittance, bool &geometricBackside)
 {
     const Bsdf &bsdf = *info.bsdf;
 
@@ -526,20 +526,25 @@ bool TraceBase::handleSurface(SurfaceScatterEvent &event, IntersectionTemporary 
     float transparencyScalar = transparency.avg();
 
     Vec3f wo;
-    if (event.sampler->nextBoolean(transparencyScalar) ){
+    if (event.sampler->nextBoolean(transparencyScalar))
+    {
         wo = ray.dir();
         event.pdf = transparencyScalar;
-        event.weight = transparency/transparencyScalar;
+        event.weight = transparency / transparencyScalar;
         event.sampledLobe = BsdfLobes::ForwardLobe;
         throughput *= event.weight;
-    } else {
-        if (!adjoint) {
+    }
+    else
+    {
+        if (!adjoint)
+        {
             if (enableLightSampling && bounce < _settings.maxBounces - 1)
-                emission += estimateDirect(event, medium, bounce + 1, ray, transmittance)*throughput;
+                emission += estimateDirect(event, medium, bounce + 1, ray, transmittance) * throughput;
 
-            if (info.primitive->isEmissive() && bounce >= _settings.minBounces) {
+            if (info.primitive->isEmissive() && bounce >= _settings.minBounces)
+            {
                 if (!enableLightSampling || wasSpecular || !info.primitive->isSamplable())
-                    emission += info.primitive->evalDirect(data, info)*throughput;
+                    emission += info.primitive->evalDirect(data, info) * throughput;
             }
         }
 
@@ -558,12 +563,38 @@ bool TraceBase::handleSurface(SurfaceScatterEvent &event, IntersectionTemporary 
             ray.setPrimaryRay(false);
     }
 
-    bool geometricBackside = (wo.dot(info.Ng) < 0.0f);
+    geometricBackside = (wo.dot(info.Ng) < 0.0f);
     medium = info.primitive->selectMedium(medium, geometricBackside);
     state.reset();
 
     ray = ray.scatter(ray.hitpoint(), wo, info.epsilon);
 
+    return true;
+}
+
+bool TraceBase::handleSurface(SurfaceScatterEvent &event, IntersectionTemporary &data,
+                              IntersectionInfo &info, const Medium *&medium,
+                              int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
+                              Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
+                              Medium::MediumState &state, Vec3f *transmittance)
+{
+    bool geometricBackside = false;
+    return handleSurfaceHelper(event, data, info, medium, bounce, adjoint, enableLightSampling, ray, throughput, emission, wasSpecular, state, transmittance, geometricBackside);
+}
+
+bool TraceBase::handleSurface(SurfaceScatterEvent &event, IntersectionTemporary &data,
+                              IntersectionInfo &info, const Medium *&medium, float &speedOfLight,
+                              int bounce, bool adjoint, bool enableLightSampling, Ray &ray,
+                              Vec3f &throughput, Vec3f &emission, bool &wasSpecular,
+                              Medium::MediumState &state, Vec3f *transmittance)
+{
+    bool geometricBackside = false;
+    bool succeed = handleSurfaceHelper(event, data, info, medium, bounce, adjoint, enableLightSampling, ray, throughput, emission, wasSpecular, state, transmittance, geometricBackside);
+    if (!succeed)
+    {
+        return false;
+    }
+    speedOfLight = info.primitive->selectSpeedOfLight(speedOfLight, info.p, geometricBackside);
     return true;
 }
 

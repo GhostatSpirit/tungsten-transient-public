@@ -14,94 +14,120 @@
 
 namespace Tungsten {
 
-ProgressivePhotonMapIntegrator::ProgressivePhotonMapIntegrator()
+template<bool isTransient>
+ProgressivePhotonMapIntegrator<isTransient>::ProgressivePhotonMapIntegrator()
 : _iteration(0)
 {
 }
 
-void ProgressivePhotonMapIntegrator::fromJson(JsonPtr value, const Scene &scene)
+template<bool isTransient>
+void ProgressivePhotonMapIntegrator<isTransient>::fromJson(JsonPtr value, const Scene &scene)
 {
-    PhotonMapIntegrator::fromJson(value, scene);
+    PhotonMapIntegrator<isTransient>::fromJson(value, scene);
     _progressiveSettings.fromJson(value);
 }
 
-rapidjson::Value ProgressivePhotonMapIntegrator::toJson(Allocator &allocator) const
+template<bool isTransient>
+rapidjson::Value ProgressivePhotonMapIntegrator<isTransient>::toJson(Allocator &allocator) const
 {
-    return _progressiveSettings.toJson(_settings, allocator);
+    return _progressiveSettings.toJson(this->_settings, allocator);
 }
 
-void ProgressivePhotonMapIntegrator::prepareForRender(TraceableScene &scene, uint32 seed)
+template<bool isTransient>
+void ProgressivePhotonMapIntegrator<isTransient>::prepareForRender(TraceableScene &scene, uint32 seed)
 {
     _iteration = 0;
-    PhotonMapIntegrator::prepareForRender(scene, seed);
+    PhotonMapIntegrator<isTransient>::prepareForRender(scene, seed);
 
-    for (size_t i = 0; i < _tracers.size(); ++i)
-        _shadowSamplers.emplace_back(_sampler.nextI());
+    for (size_t i = 0; i < this->_tracers.size(); ++i)
+        _shadowSamplers.emplace_back(this->_sampler.nextI());
 }
 
-void ProgressivePhotonMapIntegrator::renderSegment(std::function<void()> completionCallback)
+template<bool isTransient>
+void ProgressivePhotonMapIntegrator<isTransient>::renderSegment(std::function<void()> completionCallback)
 {
-    _totalTracedSurfacePaths = 0;
-    _totalTracedVolumePaths  = 0;
-    _totalTracedPaths        = 0;
-    _pathPhotonCount         = 0;
-    _scene->cam().setSplatWeight(1.0/_nextSpp);
+    this->_totalTracedSurfacePaths = 0;
+    this->_totalTracedVolumePaths  = 0;
+    this->_totalTracedPaths        = 0;
+    this->_pathPhotonCount         = 0;
+    this->_scene->cam().setSplatWeight(1.0/this->_nextSpp);
 
     using namespace std::placeholders;
 
     ThreadUtils::pool->yield(*ThreadUtils::pool->enqueue(
-        std::bind(&ProgressivePhotonMapIntegrator::tracePhotons, this, _1, _2, _3, _iteration*_settings.photonCount),
-        _tracers.size(),
+        std::bind(&ProgressivePhotonMapIntegrator::tracePhotons, this, _1, _2, _3, this->_iteration*this->_settings.photonCount),
+        this->_tracers.size(),
         [](){}
     ));
 
     float gamma = 1.0f;
-    for (uint32 i = 1; i <= _iteration; ++i)
-        gamma *= (i + _progressiveSettings.alpha)/(i + 1.0f);
+    for (uint32 i = 1; i <= this->_iteration; ++i)
+        gamma *= (i + this->_progressiveSettings.alpha)/(i + 1.0f);
 
     float gamma1D = gamma;
     float gamma2D = std::sqrt(gamma);
     float gamma3D = std::cbrt(gamma);
 
-    float volumeScale;
-    if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_POINTS)
+    float volumeScale = 1.f;
+    float beamTemporalScale = 1.f;
+    bool useBeams = this->_settings.volumePhotonType == VOLUME_BEAMS
+                 || this->_settings.volumePhotonType == VOLUME_VOLUMES_BALLS
+                 || this->_settings.volumePhotonType == VOLUME_MIS_VOLUMES_BALLS
+                 ;
+    bool beamTemporalProgressive = false;
+
+    if (this->_settings.volumePhotonType == VOLUME_POINTS)
+    {
         volumeScale = gamma3D;
+    }
+    else if (isTransient && this->_settings.deltaTimeGate && useBeams)
+    {
+        volumeScale = gamma2D;
+        beamTemporalScale = gamma2D;
+        beamTemporalProgressive = true;
+    }
     else
+    {
         volumeScale = gamma1D;
+    }
 
-    float surfaceRadius = _settings.gatherRadius*gamma2D;
-    float volumeRadius = _settings.volumeGatherRadius*volumeScale;
+    float surfaceRadius = this->_settings.gatherRadius * gamma2D;
+    float volumeRadius = this->_settings.volumeGatherRadius * volumeScale;
+    float beamTimeWidth = this->_settings.transientTimeWidth * beamTemporalScale;
 
-    buildPhotonDataStructures(volumeScale);
+    this->buildPhotonDataStructures(volumeScale, beamTemporalScale);
 
     ThreadUtils::pool->yield(*ThreadUtils::pool->enqueue(
-        std::bind(&ProgressivePhotonMapIntegrator::tracePixels, this, _1, _3, surfaceRadius, volumeRadius),
-        _tiles.size(),
-        [](){}
-    ));
-    if (_useFrustumGrid) {
+        std::bind(&ProgressivePhotonMapIntegrator::tracePixels, this, _1, _3, surfaceRadius, volumeRadius, beamTimeWidth),
+        this->_tiles.size(),
+        []() {}));
+    if (this->_useFrustumGrid) {
+        // WARNING: changing time width progressively does not currently support frustum grid
         ThreadUtils::pool->yield(*ThreadUtils::pool->enqueue(
             [&](uint32 tracerId, uint32 numTracers, uint32) {
-                uint32 start = intLerp(0, _pathPhotonCount, tracerId,     numTracers);
-                uint32 end   = intLerp(0, _pathPhotonCount, tracerId + 1, numTracers);
-                _tracers[tracerId]->evalPrimaryRays(_beams.get(), _planes0D.get(), _planes1D.get(),
-                        start, end, volumeRadius, _depthBuffer.get(), *_samplers[tracerId], _nextSpp - _currentSpp);
-            }, _tracers.size(), [](){}
+                uint32 start = intLerp(0, this->_pathPhotonCount, tracerId,     numTracers);
+                uint32 end   = intLerp(0, this->_pathPhotonCount, tracerId + 1, numTracers);
+                this->_tracers[tracerId]->evalPrimaryRays(this->_beams.get(), this->_planes0D.get(), this->_planes1D.get(),
+                        start, end, volumeRadius, this->_depthBuffer.get(), *this->_samplers[tracerId], this->_nextSpp - this->_currentSpp);
+            }, this->_tracers.size(), [](){}
         ));
     }
 
-    _currentSpp = _nextSpp;
-    advanceSpp();
+    this->_currentSpp = this->_nextSpp;
+    this->advanceSpp();
     _iteration++;
 
-    _beams.reset();
-    _planes0D.reset();
-    _planes1D.reset();
-    _surfaceTree.reset();
-    _volumeTree.reset();
-    _volumeGrid.reset();
-    _volumeBvh.reset();
-    for (SubTaskData &data : _taskData) {
+    this->_beams.reset();
+    this->_planes0D.reset();
+    this->_planes1D.reset();
+    this->_volumes.reset();
+    this->_hyperVolumes.reset();
+    this->_balls.reset();
+    this->_surfaceTree.reset();
+    this->_volumeTree.reset();
+    this->_volumeGrid.reset();
+    this->_volumeBvh.reset();
+    for (typename PhotonMapIntegrator<isTransient>::SubTaskData &data : this->_taskData) {
         data.surfaceRange.reset();
         data.volumeRange.reset();
         data.pathRange.reset();
@@ -110,16 +136,20 @@ void ProgressivePhotonMapIntegrator::renderSegment(std::function<void()> complet
     completionCallback();
 }
 
-void ProgressivePhotonMapIntegrator::startRender(std::function<void()> completionCallback)
+template<bool isTransient>
+void ProgressivePhotonMapIntegrator<isTransient>::startRender(std::function<void()> completionCallback)
 {
-    if (done()) {
+    if (this->done()) {
         completionCallback();
         return;
     }
 
-    _group = ThreadUtils::pool->enqueue([&, completionCallback](uint32, uint32, uint32) {
+    this->_group = ThreadUtils::pool->enqueue([&, completionCallback](uint32, uint32, uint32) {
         renderSegment(completionCallback);
     }, 1, [](){});
 }
 
+// explicit instantiations, required for separating implementations to cpp file.
+template class ProgressivePhotonMapIntegrator<true>;
+template class ProgressivePhotonMapIntegrator<false>;
 }

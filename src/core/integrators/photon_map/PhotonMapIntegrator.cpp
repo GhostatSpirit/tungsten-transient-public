@@ -9,24 +9,23 @@
 #include "thread/ThreadUtils.hpp"
 #include "thread/ThreadPool.hpp"
 
-#include "bvh/BinaryBvh.hpp"
-
 namespace Tungsten {
 
-CONSTEXPR uint32 PhotonMapIntegrator::TileSize;
-
-PhotonMapIntegrator::PhotonMapIntegrator()
+template<bool isTransient>
+PhotonMapIntegrator<isTransient>::PhotonMapIntegrator()
 : _w(0),
   _h(0),
   _sampler(0xBA5EBA11)
 {
 }
 
-PhotonMapIntegrator::~PhotonMapIntegrator()
+template <bool isTransient>
+PhotonMapIntegrator<isTransient>::~PhotonMapIntegrator()
 {
 }
 
-void PhotonMapIntegrator::diceTiles()
+template<bool isTransient>
+void PhotonMapIntegrator<isTransient>::diceTiles()
 {
     for (uint32 y = 0; y < _h; y += TileSize) {
         for (uint32 x = 0; x < _w; x += TileSize) {
@@ -43,15 +42,18 @@ void PhotonMapIntegrator::diceTiles()
     }
 }
 
-void PhotonMapIntegrator::saveState(OutputStreamHandle &/*out*/)
+template<bool isTransient>
+void PhotonMapIntegrator<isTransient>::saveState(OutputStreamHandle &/*out*/)
 {
 }
 
-void PhotonMapIntegrator::loadState(InputStreamHandle &/*in*/)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::loadState(InputStreamHandle & /*in*/)
 {
 }
 
-void PhotonMapIntegrator::tracePhotons(uint32 taskId, uint32 numSubTasks, uint32 threadId, uint32 sampleBase)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::tracePhotons(uint32 taskId, uint32 numSubTasks, uint32 threadId, uint32 sampleBase)
 {
     SubTaskData &data = _taskData[taskId];
     PathSampleGenerator &sampler = *_samplers[taskId];
@@ -88,7 +90,8 @@ void PhotonMapIntegrator::tracePhotons(uint32 taskId, uint32 numSubTasks, uint32
     _totalTracedPaths += totalPathsCast;
 }
 
-void PhotonMapIntegrator::tracePixels(uint32 tileId, uint32 threadId, float surfaceRadius, float volumeRadius)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::tracePixels(uint32 tileId, uint32 threadId, float surfaceRadius, float volumeRadius, float beamTimeWidth)
 {
     int spp = _nextSpp - _currentSpp;
 
@@ -110,14 +113,20 @@ void PhotonMapIntegrator::tracePixels(uint32 tileId, uint32 threadId, float surf
                     _beams.get(),
                     _planes0D.get(),
                     _planes1D.get(),
+                    _volumes.get(),
+                    _hyperVolumes.get(),
+                    _balls.get(),
                     *tile.sampler,
                     surfaceRadius,
                     volumeRadius,
+                    beamTimeWidth,
                     _settings.volumePhotonType,
                     *depthRay,
                     _useFrustumGrid
                 );
                 _scene->cam().colorBuffer()->addSample(pixel, c);
+                // ASSERT(c.min() >= 0.0f, "c is negative");
+                // ASSERT(!std::isnan(c), "c is nan");
             }
             if (_group->isAborting())
                 break;
@@ -138,29 +147,39 @@ std::unique_ptr<KdTree<PhotonType>> streamCompactAndBuild(std::vector<PhotonRang
     return std::unique_ptr<KdTree<PhotonType>>(new KdTree<PhotonType>(&photons[0], tail));
 }
 
-static void precomputeBeam(PhotonBeam &beam, const PathPhoton &p0, const PathPhoton &p1)
+template<bool isTransient>
+void PhotonMapIntegrator<isTransient>::precomputeBeam(PhotonBeam &beam, const PathPhoton &p0, const PathPhoton &p1)
 {
     beam.p0 = p0.pos;
     beam.p1 = p1.pos;
     beam.dir = p0.dir;
     beam.length = p0.length;
     beam.power = p1.power;
+    if constexpr (isTransient)
+        beam.timeTraveled = p0.timeTraveled;
     beam.bounce = p0.bounce();
     beam.valid = true;
 }
-static void precomputePlane0D(PhotonPlane0D &plane, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2)
+
+template<bool isTransient>
+void PhotonMapIntegrator<isTransient>::precomputePlane0D(PhotonPlane0D &plane, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2)
 {
     Vec3f d1 = p1.dir*p1.sampledLength;
-    plane = PhotonPlane0D{
-        p0.pos, p1.pos, p1.pos + d1, p0.pos + d1,
-        p0.length*p1.sampledLength*p2.power,
-        p1.dir,
-        p1.sampledLength,
-        int(p1.bounce()),
-        true
-    };
+
+    plane.p0 = p0.pos;
+    plane.p1 = p1.pos;
+    plane.p2 = p1.pos + d1;
+    plane.p3 = p0.pos + d1;
+    plane.power = p0.length * p1.sampledLength * p2.power;
+    plane.d1 = p1.dir;
+    plane.l1 = p1.sampledLength;
+    plane.bounce = int(p1.bounce());
+    plane.valid = true;
+    if constexpr (isTransient)
+        plane.timeTraveled = p0.timeTraveled;
 }
-static void precomputePlane1D(PhotonPlane1D &plane, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2, float radius)
+
+static void precomputePlane1D(PhotonPlane1D &plane, const SteadyPathPhoton &p0, const SteadyPathPhoton &p1, const SteadyPathPhoton &p2, float radius)
 {
     Vec3f a = p1.pos - p0.pos;
     Vec3f b = p1.dir*p1.sampledLength;
@@ -194,7 +213,234 @@ static void precomputePlane1D(PhotonPlane1D &plane, const PathPhoton &p0, const 
     plane.bounce = p1.bounce();
 }
 
-static void insertDicedBeam(Bvh::PrimVector &beams, PhotonBeam &beam, uint32 i, const PathPhoton &p0, const PathPhoton &p1, float radius)
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeUnslicedVolume(PhotonVolume &volume, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2, const PathPhoton &p3)
+{
+    Vec3f a = p0.dir * p0.sampledLength;
+    Vec3f b = p1.dir * p1.sampledLength;
+    Vec3f c = p2.dir * p2.sampledLength;
+    // TODO: optimization: avoid normalizing determinant (like precomputePlane1D())
+    float det = std::abs(a.dot(b.cross(c))) / (a.length() * b.length() * c.length());
+    if (!std::isfinite(det) || det < 1e-4f)
+    {
+        volume.valid = false;
+        return false;
+    }
+
+    float invDet = 1.0f / det;
+
+    volume.p = p0.pos;
+    volume.a = a;
+    volume.b = b;
+    volume.c = c;
+
+    volume.aDir = p0.dir;
+    volume.bDir = p1.dir;
+    volume.cDir = p2.dir;
+    volume.aLen = p0.sampledLength;
+    volume.bLen = p1.sampledLength;
+    volume.cLen = p2.sampledLength;
+
+    if (volume.aLen == 0.f || volume.bLen == 0.f || volume.cLen == 0.f)
+    {
+        volume.valid = false;
+        return false;
+    }
+
+    volume.power = p3.power;
+    volume.invDet = invDet;
+    volume.bounce = int(p2.bounce());
+    volume.valid = true;
+
+    if constexpr (isTransient)
+    {
+        volume.timeTraveled = p0.timeTraveled;
+        volume.n = volume.aDir.cross(volume.bDir) + volume.bDir.cross(volume.cDir) + volume.cDir.cross(volume.aDir);
+        volume.isDeltaSliced = false;
+    }
+
+    return true;
+}
+
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeSlicedVolume(Transient::TransientPhotonVolume &volume,
+                                                              const PathPhoton &p0,
+                                                              const PathPhoton &p1,
+                                                              const PathPhoton &p2,
+                                                              const PathPhoton &p3,
+                                                              float timeGate,
+                                                              float timeGateBeg,
+                                                              float timeGateEnd,
+                                                              bool enableTimeCull)
+{
+    bool valid = precomputeUnslicedVolume(volume, p0, p1, p2, p3);
+    if (!volume.valid)
+    {
+        return false;
+    }
+
+    if (enableTimeCull && timeGate < volume.timeTraveled)
+    {
+        return false;
+    }
+
+    const Medium *medium = p1.scatter().medium();
+    volume.isDeltaSliced = true;
+    float dt = timeGate - volume.timeTraveled;
+    volume.sampledDeltaTime = dt;
+    volume.p0 = medium->travel(p0.pos, p0.dir, dt);
+    volume.p1 = medium->travel(p0.pos, p1.dir, dt);
+    volume.p2 = medium->travel(p0.pos, p2.dir, dt);
+
+    float maxDist = volume.aLen + volume.bLen + volume.cLen;
+    if (enableTimeCull && medium->speedOfLight(p0.pos) * dt > maxDist)
+    {
+        return false;
+    }
+
+    if (enableTimeCull && volume.bounds().empty())
+    {
+        return false;
+    }
+    return true;
+}
+
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeVolume(PhotonVolume &volume, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2, const PathPhoton &p3)
+{
+    bool valid = true;
+    if constexpr (!isTransient)
+    {
+        valid = precomputeUnslicedVolume(volume, p0, p1, p2, p3);
+    }
+    else
+    {
+        float timeGate = lerp(_settings.transientTimeBeg, _settings.transientTimeEnd, _sampler.next1D());
+        valid = precomputeSlicedVolume(volume, p0, p1, p2, p3, timeGate, _settings.transientTimeBeg, _settings.transientTimeEnd);
+    }
+    return valid;
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::precomputeHyperVolume(PhotonHyperVolume &hyperVolume, const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2, const PathPhoton &p3, const PathPhoton &p4)
+{
+    Vec3f a = p0.dir * p0.sampledLength;
+    Vec3f b = p1.dir * p1.sampledLength;
+    Vec3f c = p2.dir * p2.sampledLength;
+    Vec3f d = p3.dir * p3.sampledLength;
+    Vec3f aDir = p0.dir;
+    Vec3f bDir = p1.dir;
+    Vec3f cDir = p2.dir;
+    Vec3f dDir = p3.dir;
+
+    hyperVolume.p = p0.pos;
+    hyperVolume.a = a;
+    hyperVolume.b = b;
+    hyperVolume.c = c;
+    hyperVolume.d = d;
+    hyperVolume.aDir = aDir;
+    hyperVolume.bDir = bDir;
+    hyperVolume.cDir = cDir;
+    hyperVolume.dDir = dDir;
+    hyperVolume.aLen = p0.sampledLength;
+    hyperVolume.bLen = p1.sampledLength;
+    hyperVolume.cLen = p2.sampledLength;
+    hyperVolume.dLen = p3.sampledLength;
+
+    hyperVolume.bounce = int(p3.bounce());
+    hyperVolume.power = p4.power;
+    hyperVolume.valid = true;
+
+    if constexpr (isTransient)
+    {
+        hyperVolume.timeTraveled = p0.timeTraveled;
+        float jacobian = abs(
+            +aDir.dot(bDir.cross(cDir))
+            -bDir.dot(cDir.cross(dDir))
+            +cDir.dot(dDir.cross(aDir))
+            -dDir.dot(aDir.cross(bDir))
+        );
+        hyperVolume.invJacobian = 1.0f / jacobian;
+        if (jacobian < 1e-9f)
+        {
+            hyperVolume.valid = false;
+            return;
+        }
+    }
+}
+
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeUnslicedBall(PhotonBall &ball, const PathPhoton &p0, const PathPhoton &p1)
+{
+    ball.p = p0.pos;
+    ball.r = p0.sampledLength;
+    if (ball.r == 0.f)
+    {
+        ball.valid = false;
+        return false;
+    }
+    ball.power = p1.power;
+    ball.scatter = p0.scatter();
+    ball.valid = true;
+    ball.bounce = p0.bounce();
+    if constexpr (isTransient)
+    {
+        ball.isDeltaSliced = false;
+        ball.timeTraveled = p0.timeTraveled;
+    }
+    return true;
+}
+
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeSlicedBall(Transient::TransientPhotonBall &ball,
+                                                            const PathPhoton &p0,
+                                                            const PathPhoton &p1,
+                                                            float timeGate,
+                                                            float timeGateBeg,
+                                                            float timeGateEnd,
+                                                            bool enableTimeCull)
+{
+    bool valid = precomputeUnslicedBall(ball, p0, p1);
+    if (!valid)
+    {
+        return false;
+    }
+
+    if (enableTimeCull && timeGate < ball.timeTraveled)
+    {
+        return false;
+    }
+
+    const Medium *medium = p1.inMedium;
+    ball.isDeltaSliced = true;
+    float dt = timeGate - ball.timeTraveled;
+    ball.temporalRadius = medium->speedOfLight(p0.pos) * dt;
+    if (enableTimeCull && ball.temporalRadius > ball.r)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::precomputeBall(PhotonBall &ball, const PathPhoton &p0, const PathPhoton &p1)
+{
+    bool valid = true;
+    if constexpr (!isTransient)
+    {
+        valid = precomputeUnslicedBall(ball, p0, p1);
+    }
+    else
+    {
+        float timeGate = lerp(_settings.transientTimeBeg, _settings.transientTimeEnd, _sampler.next1D());
+        valid = precomputeSlicedBall(ball, p0, p1, timeGate, _settings.transientTimeBeg, _settings.transientTimeEnd);
+    }
+    return valid;
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::insertDicedBeam(Bvh::PrimVector &beams, PhotonBeam &beam, uint32 i, const PathPhoton &p0, const PathPhoton &p1, float radius)
 {
     precomputeBeam(beam, p0, p1);
 
@@ -223,7 +469,17 @@ static void insertDicedBeam(Bvh::PrimVector &beams, PhotonBeam &beam, uint32 i, 
     }
 }
 
-void PhotonMapIntegrator::buildPointBvh(uint32 tail, float volumeRadiusScale)
+template <bool isTransient>
+bool PhotonMapIntegrator<isTransient>::canBuildVolume(const PathPhoton &p0, const PathPhoton &p1, const PathPhoton &p2, const PathPhoton &p3)
+{
+    bool onSurface = p2.onSurface() || p1.onSurface();
+    bool isSampledLengthValid = p1.sampledLength > 0.0f && p2.sampledLength > 0.0f;
+    bool canSpawnVolume = p3.bounce() > 2 && !onSurface && isSampledLengthValid;
+    return canSpawnVolume;
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildPointBvh(uint32 tail, float volumeRadiusScale)
 {
     float radius = _settings.volumeGatherRadius*volumeRadiusScale;
 
@@ -236,7 +492,8 @@ void PhotonMapIntegrator::buildPointBvh(uint32 tail, float volumeRadiusScale)
 
     _volumeBvh.reset(new Bvh::BinaryBvh(std::move(points), 1));
 }
-void PhotonMapIntegrator::buildBeamBvh(uint32 tail, float volumeRadiusScale)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildBeamBvh(uint32 tail, float volumeRadiusScale)
 {
     float radius = _settings.volumeGatherRadius*volumeRadiusScale;
 
@@ -245,26 +502,37 @@ void PhotonMapIntegrator::buildBeamBvh(uint32 tail, float volumeRadiusScale)
         if (_pathPhotons[i].bounce() == 0)
             continue;
 
-        if (!_pathPhotons[i - 1].onSurface() || _settings.lowOrderScattering)
+        if (_settings.excludeNonMIS)
+        {
+            if (_pathPhotons[i].bounce() <= 2)
+                continue;
+
+            if (!canBuildVolume(_pathPhotons[i - 3], _pathPhotons[i - 2], _pathPhotons[i - 1], _pathPhotons[i]))
+                continue;
+        }
+
+        bool lowOrderValid = _settings.lowOrderScattering && !_pathPhotons[i - 1].isGhostBounce();
+        if (!_pathPhotons[i - 1].onSurface() || lowOrderValid)
             insertDicedBeam(beams, _beams[i], i, _pathPhotons[i - 1], _pathPhotons[i], radius);
     }
 
     _volumeBvh.reset(new Bvh::BinaryBvh(std::move(beams), 1));
 }
-void PhotonMapIntegrator::buildPlaneBvh(uint32 tail, float volumeRadiusScale)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildPlaneBvh(uint32 tail, float volumeRadiusScale)
 {
     float radius = _settings.volumeGatherRadius*volumeRadiusScale;
 
     Bvh::PrimVector planes;
     for (uint32 i = 0; i < tail; ++i) {
-        const PathPhoton &p0 = _pathPhotons[i - 2];
         const PathPhoton &p1 = _pathPhotons[i - 1];
         const PathPhoton &p2 = _pathPhotons[i - 0];
 
         if (p2.bounce() > 0 && p2.bounce() > p1.bounce() && p1.onSurface() && _settings.lowOrderScattering)
             insertDicedBeam(planes, _beams[i], i, p1, p2, radius);
         if (p2.bounce() > 1 && !p1.onSurface() && p1.sampledLength > 0.0f) {
-            if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES) {
+            const PathPhoton &p0 = _pathPhotons[i - 2];
+            if (_settings.volumePhotonType == VOLUME_PLANES) {
                 precomputePlane0D(_planes0D[i], p0, p1, p2);
                 Box3f bounds = _planes0D[i].bounds();
                 planes.emplace_back(Bvh::Primitive(bounds, bounds.center(), i));
@@ -280,49 +548,257 @@ void PhotonMapIntegrator::buildPlaneBvh(uint32 tail, float volumeRadiusScale)
 
     _volumeBvh.reset(new Bvh::BinaryBvh(std::move(planes), 1));
 }
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::PhotonMapIntegrator::buildVolumeBvh(uint32 tail, float volumeRadiusScale)
+{
+    Bvh::PrimVector prims;
+    for (uint32 i = 3; i < tail; ++i)
+    {
+        // TODO: support lowOrderScattering
+        const PathPhoton &p0 = _pathPhotons[i - 3];
+        const PathPhoton &p1 = _pathPhotons[i - 2];
+        const PathPhoton &p2 = _pathPhotons[i - 1];
+        const PathPhoton &p3 = _pathPhotons[i - 0];
 
-void PhotonMapIntegrator::buildBeamGrid(uint32 tail, float volumeRadiusScale)
+        bool onSurface = p2.onSurface() || p1.onSurface();
+        bool isSampledLengthValid = p1.sampledLength > 0.0f && p2.sampledLength > 0.0f;
+        if (p3.bounce() > 2 && !onSurface && isSampledLengthValid)
+        {
+            bool valid = precomputeVolume(_volumes[i], p0, p1, p2, p3);
+            if (valid)
+            {
+                Box3f bounds = _volumes[i].bounds();
+                prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), i));
+            }
+        }
+    }
+
+    _volumeBvh.reset(new Bvh::BinaryBvh(std::move(prims), 1));
+}
+
+// TODO: deduplicate with PhotonTracer.cpp
+static inline bool occuluded(const TraceableScene *scene, Vec3f origin, Vec3f dir, const float len, float nearT = 1e-4f)
+{
+    Ray shadowRay = Ray(origin, dir, nearT, len);
+    shadowRay.setNearT(nearT);
+    return scene->occluded(shadowRay);
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::PhotonMapIntegrator::buildVolumeBallBvh(uint32 tail, float volumeRadiusScale, bool enableMIS)
+{
+    Bvh::PrimVector prims;
+    for (uint32 i = 0; i < tail; ++i)
+    {
+        const PathPhoton &p3 = _pathPhotons[i - 0];
+        if (p3.bounce() > 0 && _settings.lowOrderScattering && !_settings.excludeNonMIS)
+        {
+            const PathPhoton &p2 = _pathPhotons[i - 1];
+            bool prevTwoOnSurface = i == 1 ? p2.onSurface() : p2.onSurface() || _pathPhotons[i - 2].onSurface();
+            bool samePath = p3.bounce() > p2.bounce();
+            bool isSpecular = p2.scatter().isSpecular();
+            bool isGhostBounce = p2.isGhostBounce();
+            if (prevTwoOnSurface && samePath && !isGhostBounce)
+            {
+                if (!isSpecular)
+                {
+                    bool valid = precomputeBall(_balls[i], p2, p3);
+                    if (valid)
+                    {
+                        Box3f bounds = _balls[i].bounds();
+                        TypedPhotonIdx idx(VOLUME_BALLS, i);
+                        prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), static_cast<uint32>(idx)));
+                    }
+                }
+                else
+                {
+                    // create beam
+                    float radius = _settings.volumeGatherRadius * volumeRadiusScale;
+                    TypedPhotonIdx idx(VOLUME_BEAMS, i);
+                    insertDicedBeam(prims, _beams[i], static_cast<uint32>(idx), p2, p3, radius);
+                }
+            }
+        }
+
+        if (p3.bounce() > 2)
+        {
+            const PathPhoton &p0 = _pathPhotons[i - 3];
+            const PathPhoton &p1 = _pathPhotons[i - 2];
+            const PathPhoton &p2 = _pathPhotons[i - 1];
+
+            if (!canBuildVolume(p0, p1, p2, p3))
+            {
+                continue;
+            }
+
+            if (!enableMIS)
+            {
+                if (precomputeVolume(_volumes[i], p0, p1, p2, p3))
+                {
+                    Box3f bounds = _volumes[i].bounds();
+                    TypedPhotonIdx idx(VOLUME_VOLUMES, i);
+                    prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), static_cast<uint32>(idx)));
+                }
+            }
+            else
+            {
+                if constexpr (isTransient)
+                {
+                    float timeGate = lerp(_settings.transientTimeBeg, _settings.transientTimeEnd, _sampler.next1D());
+
+                    bool isectVolume = _sampler.next1D() < 0.5f;
+                    bool volumeEnableTimeCull = isectVolume;
+                    bool ballEnableTimeCull = !isectVolume;
+
+                    bool volumeValid = precomputeSlicedVolume(_volumes[i], p0, p1, p2, p3, timeGate, _settings.transientTimeBeg, _settings.transientTimeEnd, volumeEnableTimeCull);
+                    _volumes[i].valid = volumeValid;
+                    bool ballValid = precomputeSlicedBall(_balls[i], p2, p3, timeGate, _settings.transientTimeBeg, _settings.transientTimeEnd, ballEnableTimeCull);
+                    _balls[i].valid = ballValid;
+
+                    if (isectVolume)
+                    {
+                        if (volumeValid)
+                        {
+                            Box3f bounds = _volumes[i].bounds();
+                            TypedPhotonIdx idx(VOLUME_VOLUMES, i);
+                            prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), static_cast<uint32>(idx)));
+                        }
+                    }
+                    else
+                    {
+                        bool prevPathOcculuded = false;
+                        if (p3.isGhostBounce())
+                        {
+                            prevPathOcculuded = occuluded(_scene, p0.pos, p0.dir, p0.sampledLength)
+                                             || occuluded(_scene, p1.pos, p1.dir, p1.sampledLength)
+                                              ;
+                        }
+
+                        if (ballValid && !prevPathOcculuded)
+                        {
+                            Box3f bounds = _balls[i].bounds();
+                            TypedPhotonIdx idx(VOLUME_BALLS, i);
+                            prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), static_cast<uint32>(idx)));
+                        }
+                    }
+                }
+                else
+                {
+                    FAIL("MIS does not support non transient mode");
+                }
+
+            }
+        }
+    }
+
+    _volumeBvh.reset(new Bvh::BinaryBvh(std::move(prims), 1));
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::PhotonMapIntegrator::buildHyperVolumeBvh(uint32 tail, float volumeRadiusScale)
+{
+    Bvh::PrimVector hyperVolumes;
+    for (uint32 i = 4; i < tail; ++i) {
+        // TODO: support lowOrderScattering
+        const PathPhoton &p0 = _pathPhotons[i - 4];
+        const PathPhoton &p1 = _pathPhotons[i - 3];
+        const PathPhoton &p2 = _pathPhotons[i - 2];
+        const PathPhoton &p3 = _pathPhotons[i - 1];
+        const PathPhoton &p4 = _pathPhotons[i - 0];
+
+        bool onSurface = p1.onSurface() || p2.onSurface() || p3.onSurface();
+        bool isSampledLengthValid = p1.sampledLength > 0.0f && p2.sampledLength > 0.0f && p3.sampledLength > 0.0f;
+        if (p4.bounce() > 3 && !onSurface && isSampledLengthValid) {
+            precomputeHyperVolume(_hyperVolumes[i], p0, p1, p2, p3, p4);
+            Box3f bounds = _hyperVolumes[i].bounds();
+            hyperVolumes.emplace_back(Bvh::Primitive(bounds, bounds.center(), i));
+        }
+    }
+
+    _volumeBvh.reset(new Bvh::BinaryBvh(std::move(hyperVolumes), 1));
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildBallBvh(uint32 tail, float volumeRadiusScale)
+{
+    ASSERT(isTransient, "only support ball for transient for now");
+    Bvh::PrimVector prims;
+
+    for (uint32 i = 1; i < tail; ++i)
+    {
+        const PathPhoton &p0 = _pathPhotons[i - 1];
+        const PathPhoton &p1 = _pathPhotons[i - 0];
+
+        bool samePath = p1.bounce() > p0.bounce();
+        bool isSpecular = p0.scatter().isSpecular();
+        bool isGhostBounce = p0.isGhostBounce();
+        bool pathValid = samePath && !isGhostBounce && !isSpecular;
+        if (!pathValid)
+        {
+            continue;
+        }
+
+        if (p0.bounce() <= 0)
+        {
+            continue;
+        }
+        if (!precomputeBall(_balls[i], p0, p1))
+        {
+            continue;
+        }
+
+        Box3f bounds = _balls[i].bounds();
+        prims.emplace_back(Bvh::Primitive(bounds, bounds.center(), i));
+    }
+
+    _volumeBvh.reset(new Bvh::BinaryBvh(std::move(prims), 1));
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildBeamGrid(uint32 tail, float volumeRadiusScale)
 {
     float radius = _settings.volumeGatherRadius*volumeRadiusScale;
 
     std::vector<GridAccel::Primitive> beams;
     for (uint32 i = 0; i < tail; ++i) {
-        const PathPhoton &p0 = _pathPhotons[i - 1];
-        const PathPhoton &p1 = _pathPhotons[i - 0];
         if (_pathPhotons[i].bounce() == 0)
             continue;
 
+        const PathPhoton &p0 = _pathPhotons[i - 1];
+        const PathPhoton &p1 = _pathPhotons[i - 0];
+
         if (!_pathPhotons[i - 1].onSurface() || _settings.lowOrderScattering) {
             precomputeBeam(_beams[i], p0, p1);
-            beams.emplace_back(GridAccel::Primitive(i, p0.pos, p1.pos, Vec3f(0.0f), Vec3f(0.0f), radius, true));
+            beams.emplace_back(GridAccel::Primitive(i, p0.pos, p1.pos, Vec3f(0.0f), Vec3f(0.0f), radius, VOLUME_BEAMS));
         }
     }
 
     _volumeGrid.reset(new GridAccel(_scene->bounds(), _settings.gridMemBudgetKb, std::move(beams)));
 }
-void PhotonMapIntegrator::buildPlaneGrid(uint32 tail, float volumeRadiusScale)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildPlaneGrid(uint32 tail, float volumeRadiusScale)
 {
     float radius = _settings.volumeGatherRadius*volumeRadiusScale;
 
     std::vector<GridAccel::Primitive> prims;
     for (uint32 i = 0; i < tail; ++i) {
-        const PathPhoton &p0 = _pathPhotons[i - 2];
         const PathPhoton &p1 = _pathPhotons[i - 1];
         const PathPhoton &p2 = _pathPhotons[i - 0];
 
         if (p2.bounce() > 0 && p2.bounce() > p1.bounce() && p1.onSurface() && _settings.lowOrderScattering) {
             precomputeBeam(_beams[i], p1, p2);
-            prims.emplace_back(GridAccel::Primitive(i, p1.pos, p2.pos, Vec3f(0.0f), Vec3f(0.0f), radius, true));
+            prims.emplace_back(GridAccel::Primitive(i, p1.pos, p2.pos, Vec3f(0.0f), Vec3f(0.0f), radius, VOLUME_BEAMS));
         }
         if (p2.bounce() > 1 && !p1.onSurface() && p1.sampledLength > 0.0f) {
-            if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES) {
+            const PathPhoton &p0 = _pathPhotons[i - 2];
+            if (_settings.volumePhotonType == VOLUME_PLANES) {
                 precomputePlane0D(_planes0D[i], p0, p1, p2);
-                prims.emplace_back(GridAccel::Primitive(i, _planes0D[i].p0, _planes0D[i].p1, _planes0D[i].p2, _planes0D[i].p3, 0.0f, false));
+                prims.emplace_back(GridAccel::Primitive(i, _planes0D[i].p0, _planes0D[i].p1, _planes0D[i].p2, _planes0D[i].p3, 0.0f, VOLUME_PLANES));
             } else {
                 precomputePlane1D(_planes1D[i], p0, p1, p2, radius);
                 if (_planes1D[i].valid) {
                     Vec3f p = _planes1D[i].center, a = _planes1D[i].a, b = _planes1D[i].b;
-                    prims.emplace_back(GridAccel::Primitive(i, p - a - b, p + a - b, p + a + b, p - a + b, radius, false));
+                    prims.emplace_back(GridAccel::Primitive(i, p - a - b, p + a - b, p + a + b, p - a + b, radius, VOLUME_PLANES));
                 }
             }
         }
@@ -330,8 +806,40 @@ void PhotonMapIntegrator::buildPlaneGrid(uint32 tail, float volumeRadiusScale)
 
     _volumeGrid.reset(new GridAccel(_scene->bounds(), _settings.gridMemBudgetKb, std::move(prims)));
 }
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::PhotonMapIntegrator::buildVolumeGrid(uint32 tail, float volumeRadiusScale)
+{
+    // TODO: support lowOrderScattering
+    std::vector<GridAccel::Primitive> prims;
+    for (uint32 i = 0; i < tail; ++i) {
+        // TODO: support lowOrderScattering
+        const PathPhoton &p3 = _pathPhotons[i - 0];
+        if (p3.bounce() > 2)
+        {
+            const PathPhoton &p0 = _pathPhotons[i - 3];
+            const PathPhoton &p1 = _pathPhotons[i - 2];
+            const PathPhoton &p2 = _pathPhotons[i - 1];
+            bool onSurface = p2.onSurface() || p1.onSurface();
+            bool isSampledLengthValid = p1.sampledLength > 0.0f && p2.sampledLength > 0.0f;
+            if (p3.bounce() > 2 && !onSurface && isSampledLengthValid)
+            {
+                precomputeUnslicedVolume(_volumes[i], p0, p1, p2, p3);
+                prims.emplace_back(GridAccel::Primitive(i, _volumes[i].p, _volumes[i].a, _volumes[i].b, _volumes[i].c, 0.0f, VOLUME_VOLUMES));
+            }
+        }
 
-void PhotonMapIntegrator::buildPhotonDataStructures(float volumeRadiusScale)
+    }
+
+    _volumeGrid.reset(new GridAccel(_scene->bounds(), _settings.gridMemBudgetKb, std::move(prims)));
+}
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::PhotonMapIntegrator::buildHyperVolumeGrid(uint32 tail, float volumeRadiusScale)
+{
+    FAIL("PhotonMapIntegrator::buildHyperVolumeGrid() not implemented");
+}
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::buildPhotonDataStructures(float volumeRadiusScale, float beamTemporalRadiusScale)
 {
     std::vector<SurfacePhotonRange> surfaceRanges;
     std::vector<VolumePhotonRange> volumeRanges;
@@ -351,7 +859,10 @@ void PhotonMapIntegrator::buildPhotonDataStructures(float volumeRadiusScale)
     } else if (!_pathPhotons.empty()) {
         uint32 tail = streamCompact(pathRanges);
         for (uint32 i = 0; i < tail; ++i)
+        {
             _pathPhotons[i].power *= (1.0/_totalTracedPaths);
+            _pathPhotons[i].surfPower *= (1.0/_totalTracedPaths);
+        }
 
         for (uint32 i = 0; i < tail; ++i) {
             if (_pathPhotons[i].bounce() > 0) {
@@ -365,18 +876,18 @@ void PhotonMapIntegrator::buildPhotonDataStructures(float volumeRadiusScale)
         for (uint32 i = 0; i < tail; ++i)
             _beams[i].valid = false;
 
-        if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_BEAMS) {
+        if (_settings.volumePhotonType == VOLUME_BEAMS) {
             if (_settings.useGrid)
                 buildBeamGrid(tail, volumeRadiusScale);
             else
                 buildBeamBvh(tail, volumeRadiusScale);
-        } else if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES || _settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES_1D) {
-            if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES) {
+        } else if (_settings.volumePhotonType == VOLUME_PLANES || _settings.volumePhotonType == VOLUME_PLANES_1D) {
+            if (_settings.volumePhotonType == VOLUME_PLANES) {
                  _planes0D.reset(new PhotonPlane0D[tail]);
                 for (uint32 i = 0; i < tail; ++i)
                     _planes0D[i].valid = false;
             }
-            if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_PLANES_1D) {
+            if (_settings.volumePhotonType == VOLUME_PLANES_1D) {
                 _planes1D.reset(new PhotonPlane1D[tail]);
                 for (uint32 i = 0; i < tail; ++i)
                     _planes1D[i].valid = false;
@@ -386,23 +897,77 @@ void PhotonMapIntegrator::buildPhotonDataStructures(float volumeRadiusScale)
                 buildPlaneGrid(tail, volumeRadiusScale);
             else
                 buildPlaneBvh(tail, volumeRadiusScale);
+        } else if (_settings.volumePhotonType == VOLUME_VOLUMES) {
+            _volumes.reset(new PhotonVolume[tail]);
+            for (uint32 i = 0; i < tail; ++i)
+                _volumes[i].valid = false;
+
+            if (_settings.useGrid)
+                buildVolumeGrid(tail, volumeRadiusScale);
+            else
+                buildVolumeBvh(tail, volumeRadiusScale);
+        } else if (_settings.volumePhotonType == VOLUME_VOLUMES_BALLS || _settings.volumePhotonType == VOLUME_MIS_VOLUMES_BALLS) {
+            _volumes.reset(new PhotonVolume[tail]);
+            for (uint32 i = 0; i < tail; ++i)
+                _volumes[i].valid = false;
+
+            if (_settings.lowOrderScattering)
+            {
+                _balls.reset(new PhotonBall[tail]);
+                for (uint32 i = 0; i < tail; ++i)
+                    _balls[i].valid = false;
+
+                _beams.reset(new PhotonBeam[tail]);
+                for (uint32 i = 0; i < tail; ++i)
+                    _beams[i].valid = false;
+            }
+
+            bool enableMIS = _settings.volumePhotonType == VOLUME_MIS_VOLUMES_BALLS;
+            if (_settings.useGrid)
+                FAIL("VOLUME_BALL does not support grid now");
+            else
+                buildVolumeBallBvh(tail, volumeRadiusScale, enableMIS);
+        } else if (_settings.volumePhotonType == VOLUME_HYPERVOLUMES) {
+            ASSERT(isTransient == true, "does not support hyper volumes in non-transient mode");
+
+            _hyperVolumes.reset(new PhotonHyperVolume[tail]);
+            for (uint32 i = 0; i < tail; ++i)
+            {
+                _hyperVolumes[i].valid = false;
+            }
+
+            if (_settings.useGrid)
+                buildHyperVolumeGrid(tail, volumeRadiusScale);
+            else
+                buildHyperVolumeBvh(tail, volumeRadiusScale);
+        } else if (_settings.volumePhotonType == VOLUME_BALLS) {
+            ASSERT(isTransient == true, "does not support photon balls in non-transient mode");
+
+            _balls.reset(new PhotonBall[tail]);
+            for (uint32 i = 0; i < tail; ++i)
+                _balls[i].valid = false;
+
+            buildBallBvh(tail, volumeRadiusScale);
         }
 
         _pathPhotonCount = tail;
     }
 }
 
-void PhotonMapIntegrator::fromJson(JsonPtr value, const Scene &/*scene*/)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::fromJson(JsonPtr value, const Scene & /*scene*/)
 {
     _settings.fromJson(value);
 }
 
-rapidjson::Value PhotonMapIntegrator::toJson(Allocator &allocator) const
+template <bool isTransient>
+rapidjson::Value PhotonMapIntegrator<isTransient>::toJson(Allocator &allocator) const
 {
     return _settings.toJson(allocator);
 }
 
-void PhotonMapIntegrator::prepareForRender(TraceableScene &scene, uint32 seed)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::prepareForRender(TraceableScene &scene, uint32 seed)
 {
     _sampler = UniformSampler(MathUtil::hash32(seed));
     _currentSpp = 0;
@@ -425,7 +990,7 @@ void PhotonMapIntegrator::prepareForRender(TraceableScene &scene, uint32 seed)
     if (_settings.includeSurfaces)
         _surfacePhotons.resize(_settings.photonCount);
     if (!_scene->media().empty()) {
-        if (_settings.volumePhotonType == PhotonMapSettings::VOLUME_POINTS)
+        if (_settings.volumePhotonType == VOLUME_POINTS)
             _volumePhotons.resize(_settings.volumePhotonCount);
         else
             _pathPhotons.resize(_settings.volumePhotonCount);
@@ -447,7 +1012,7 @@ void PhotonMapIntegrator::prepareForRender(TraceableScene &scene, uint32 seed)
             std::unique_ptr<PathSampleGenerator>(new UniformPathSampler(MathUtil::hash32(_sampler.nextI())))
         );
 
-        _tracers.emplace_back(new PhotonTracer(&scene, _settings, i));
+        _tracers.emplace_back(new PhotonTracer<isTransient>(&scene, _settings, i));
     }
 
     Vec2u res = _scene->cam().resolution();
@@ -460,7 +1025,8 @@ void PhotonMapIntegrator::prepareForRender(TraceableScene &scene, uint32 seed)
     diceTiles();
 }
 
-void PhotonMapIntegrator::teardownAfterRender()
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::teardownAfterRender()
 {
     _group.reset();
     _depthBuffer.reset();
@@ -468,6 +1034,8 @@ void PhotonMapIntegrator::teardownAfterRender()
     _beams.reset();
     _planes0D.reset();
     _planes1D.reset();
+    _volumes.reset();
+    _hyperVolumes.reset();
 
     _surfacePhotons.clear();
      _volumePhotons.clear();
@@ -489,7 +1057,8 @@ void PhotonMapIntegrator::teardownAfterRender()
     _volumeBvh.reset();
 }
 
-void PhotonMapIntegrator::renderSegment(std::function<void()> completionCallback)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::renderSegment(std::function<void()> completionCallback)
 {
     using namespace std::placeholders;
 
@@ -505,7 +1074,7 @@ void PhotonMapIntegrator::renderSegment(std::function<void()> completionCallback
     }
 
     ThreadUtils::pool->yield(*ThreadUtils::pool->enqueue(
-        std::bind(&PhotonMapIntegrator::tracePixels, this, _1, _3, _settings.gatherRadius, _settings.volumeGatherRadius),
+        std::bind(&PhotonMapIntegrator::tracePixels, this, _1, _3, _settings.gatherRadius, _settings.volumeGatherRadius, _settings.transientTimeWidth),
         _tiles.size(), [](){}
     ));
 
@@ -527,7 +1096,8 @@ void PhotonMapIntegrator::renderSegment(std::function<void()> completionCallback
     completionCallback();
 }
 
-void PhotonMapIntegrator::startRender(std::function<void()> completionCallback)
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::startRender(std::function<void()> completionCallback)
 {
     if (done()) {
         completionCallback();
@@ -539,7 +1109,8 @@ void PhotonMapIntegrator::startRender(std::function<void()> completionCallback)
     }, 1, [](){});
 }
 
-void PhotonMapIntegrator::waitForCompletion()
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::waitForCompletion()
 {
     if (_group) {
         _group->wait();
@@ -547,7 +1118,8 @@ void PhotonMapIntegrator::waitForCompletion()
     }
 }
 
-void PhotonMapIntegrator::abortRender()
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::abortRender()
 {
     if (_group) {
         _group->abort();
@@ -555,5 +1127,15 @@ void PhotonMapIntegrator::abortRender()
         _group.reset();
     }
 }
+
+template <bool isTransient>
+void PhotonMapIntegrator<isTransient>::setTimeCenter(float timeCenter)
+{
+    _settings.setTimeCenter(timeCenter);
+}
+
+// explicit instantiations, required for separating implementations to cpp file.
+template class PhotonMapIntegrator<true>;
+template class PhotonMapIntegrator<false>;
 
 }
